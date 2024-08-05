@@ -1,5 +1,5 @@
 #include "Types.h"
-
+#include "src/fastertransformer/devices/arm_impl/type_bf16/hie_bfloat16.hpp"
 #include <string>
 #include <cstdint>
 
@@ -40,7 +40,8 @@ namespace fastertransformer {
 #elif defined(__aarch64__) 
 #define FT_FOREACH_DEVICE_TYPE(F) \
     F(DataType::TYPE_FP16, __fp16); \
-    F(DataType::TYPE_BF16, __bf16);
+    F(DataType::TYPE_BF16, hie::bfloat16);
+    // F(DataType::TYPE_BF16, __bf16);
 #else
 struct fake_half {
     uint16_t x;

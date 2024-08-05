@@ -16,6 +16,7 @@ cc_library(
     ],
     deps = [
         ":types_hdr",
+        "//src/fastertransformer/devices/arm_impl/type_bf16:hie_bfloat16",
     ] + select({
         "//:using_cuda": ["@local_config_cuda//cuda:cuda"],
         "//:using_rocm": ["@local_config_rocm//rocm:rocm_headers",

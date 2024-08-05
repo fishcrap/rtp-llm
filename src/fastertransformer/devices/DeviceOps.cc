@@ -46,6 +46,11 @@ BufferPtr DeviceOps::gemm(const GemmParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
+
+BufferPtr DeviceOps::gemm_opt(const GemmParams& params) {
+    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
 GroupedGemmOutput DeviceOps::groupedGemm(const GroupedGemmParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }

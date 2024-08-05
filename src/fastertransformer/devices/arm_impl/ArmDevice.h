@@ -4,6 +4,7 @@
 
 #include "arm_compute/runtime/NEON/NEFunctions.h"
 #include "arm_compute/runtime/Scheduler.h"
+#include "gemm_opt/ArmGemmKernel.h"
 
 namespace fastertransformer {
 
@@ -35,6 +36,7 @@ public:
 private:
     std::unique_ptr<IAllocator> allocator_;
     arm_compute::DataType getAclDataType(DataType type);
+    GemmKernel gemm_kernel_;
 };
 
 } // namespace fastertransformer

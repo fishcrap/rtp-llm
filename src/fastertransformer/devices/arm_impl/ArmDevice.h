@@ -4,6 +4,7 @@
 
 #include "arm_compute/runtime/NEON/NEFunctions.h"
 #include "arm_compute/runtime/Scheduler.h"
+#include "gemm_opt/ArmGemmKernel.h"
 
 namespace fastertransformer {
 
@@ -21,6 +22,7 @@ public:
     void copy(const CopyParams& params);
     LayernormOutput layernorm(const LayernormParams& params);
     BufferPtr gemm(const GemmParams& params);
+    BufferPtr gemm_opt(const GemmParams& params);
     GroupedGemmOutput groupedGemm(const GroupedGemmParams& params);
     BufferPtr embeddingLookup(const EmbeddingLookupParams& params);
     void activation(const ActivationParams& params);
@@ -35,6 +37,7 @@ public:
 private:
     std::unique_ptr<IAllocator> allocator_;
     arm_compute::DataType getAclDataType(DataType type);
+    GemmKernel gemm_kernel_;
 };
 
 } // namespace fastertransformer

@@ -1,6 +1,7 @@
-load("@pip_gpu_torch//:requirements.bzl", requirement_gpu="requirement")
-load("@pip_gpu_cuda12_torch//:requirements.bzl", requirement_gpu_cuda12="requirement")
-load("@pip_gpu_rocm_torch//:requirements.bzl", requirement_gpu_rocm="requirement")
+# load("@pip_gpu_torch//:requirements.bzl", requirement_gpu="requirement")
+# load("@pip_gpu_cuda12_torch//:requirements.bzl", requirement_gpu_cuda12="requirement")
+# load("@pip_gpu_rocm_torch//:requirements.bzl", requirement_gpu_rocm="requirement")
+# load("@pip_arm_torch//:requirements.bzl", requirement_arm="requirement")
 
 def copy_target_to(name, to_copy, copy_name, dests = [], **kwargs):
     if dests:
@@ -94,7 +95,7 @@ def pyc_wheel(name, package_name, src):
         cmd = "bash -c 'set -xe;" +
             "cp $(locations %s) $(OUTS);" % (src) +
             "chmod a+w $(OUTS);" +
-            "/opt/conda310/bin/python $(location //bazel:pyc_wheel.py) $(OUTS);" +
+            "/home/sxj/.conda/envs/rtp-llm/bin/python $(location //bazel:pyc_wheel.py) $(OUTS);" +
             "'",
         tags = [
             "local",

@@ -4,16 +4,10 @@
 
 #include "arm_compute/runtime/NEON/NEFunctions.h"
 #include "arm_compute/runtime/Scheduler.h"
+#include "gemm_opt/ArmGemmKernel.h"
+#include "src/fastertransformer/devices/utils/Timer.h"
 
 namespace fastertransformer {
-
-#include <omp.h>
-template <typename T0, typename F>
-void parallel_for(const T0& D0, const F& func) {
-    int nthr = omp_get_max_threads();
-#pragma omp parallel for num_threads(nthr)
-    for (T0 d0 = 0; d0 < D0; ++d0) func(d0);
-}
 
 class ArmCpuDevice : public DeviceBase {
 public:
@@ -29,6 +23,8 @@ public:
     void copy(const CopyParams& params) override;
     LayernormOutput layernorm(const LayernormParams& params) override;
     BufferPtr gemm(const GemmParams& params) override;
+    BufferPtr gemm_acl(const GemmParams& params);
+    BufferPtr gemm_opt(const GemmParams& params);
     GroupedGemmOutput groupedGemm(const GroupedGemmParams& params) override;
     BufferPtr embeddingLookup(const EmbeddingLookupParams& params) override;
     BufferPtr activation(const ActivationParams& params) override;
@@ -41,6 +37,9 @@ public:
     void allReduceSum(const AllReduceParams& params);
     void printStat();
     DeviceStatus getDeviceStatus();
+#ifdef GEMM_DEBUG
+    static void print_time();
+#endif
 
 private:
     std::unique_ptr<IAllocator> allocator_;
@@ -55,6 +54,11 @@ private:
                             999999999, 999999999, 999999999, 999999999, 999999999, 999999999, 999999999, 999999999};
     uint64_t a_tmax_[16] = {0};
     uint64_t a_tave_[16] = {0};
+    GemmKernel gemm_kernel_;
+
+#ifdef GEMM_DEBUG
+    static TimerRecorder timer_recorder_;
+#endif
 };
 
 } // namespace fastertransformer

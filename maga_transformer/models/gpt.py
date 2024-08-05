@@ -166,6 +166,18 @@ class GPT(BaseModel):
             self.model_weights_loader.show_warns(lora_name=lora_name)
         else:
             self.model_weights_loader.show_warns()
+        
+        # print('dump weights!')
+        # from maga_transformer.utils.export_utils import export_tensors_to_jit_module
+        # dump_dir = "maga_transformer/test/model_test/fake_test/testdata/qwen_0.5b"
+        # export_tensors_to_jit_module(self.weight._pytorch_weights, os.path.join(dump_dir, "pytorch_tensors.pt"))
+        # print(len(self.weight.weights))
+        # print(self.weight._pytorch_weights.keys())
+        # for i in range(len(self.weight.weights)):
+        #     if i == 0:
+        #         print(self.weight.weights[i].keys())
+        #     export_tensors_to_jit_module(self.weight.weights[i], os.path.join(dump_dir, f"layer_{i}.pt"))
+            
 
     def _load_weights(self,
                       ref_dict: Dict[str, torch.Tensor] = {}):

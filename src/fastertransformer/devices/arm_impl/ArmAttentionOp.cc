@@ -32,8 +32,8 @@ void getCacheAddrFromIndex(const KvCacheInfo& kv_cache, size_t batch, size_t blo
     size_t block_size = k_cache[0].sizeBytes();
     int    *index = (int *)kv_blocks_offset.data();
 
-    *k_addr = (char*)k_cache.data() + index[batch * max_blocks_per_batch + block_idx] * block_size;
-    *v_addr = (char*)v_cache.data() + index[batch * max_blocks_per_batch + block_idx] * block_size;
+    *k_addr = static_cast<char*>(k_cache.data()) + index[batch * max_blocks_per_batch + block_idx] * block_size;
+    *v_addr = static_cast<char*>(v_cache.data()) + index[batch * max_blocks_per_batch + block_idx] * block_size;
 }
 
 void assemCache(const AttentionModuleParams& params, BufferPtr k_out, BufferPtr v_out, size_t tokens_per_block) {

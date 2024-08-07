@@ -7,8 +7,7 @@
 #include "autil/StringUtil.h"
 #include "type_bf16/hie_bfloat16.hpp"
 #include "gemm_opt/ArmGemmKernel.h"
-#include "src/fastertransformer/devices/utils/Timer.h"
-#define GEMM_DBEUG
+
 namespace fastertransformer {
 
 /// @brief   basic gemm ops
@@ -18,7 +17,7 @@ namespace fastertransformer {
 ///          C [b, ..., m, n]
 BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
 
-#ifdef GEMM_DBEUG
+#ifdef GEMM_DEBUG
     Timer timer;
 #endif
 
@@ -79,8 +78,9 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
     bool is_transA = params.transA == TransposeOperation::TRANSPOSE;
     bool is_transB = params.transB == TransposeOperation::TRANSPOSE;
 
-#ifdef GEMM_DBEUG
-    std::cout << "preparing data: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+#ifdef GEMM_DEBUG
+    timer_recorder_.record(std::string("gemm_prepare_data, ") + "m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+    // std::cout << "preparing data: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
     timer.reset();
 #endif
     // allocate a temp workspace to pack input fp32->bf16
@@ -116,24 +116,27 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
         return nullptr;
     }
 
-#ifdef GEMM_DBEUG
-    std::cout << "preparing workspace: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+#ifdef GEMM_DEBUG
+    timer_recorder_.record(std::string("gemm_prepare_workspace(packing)") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+    // std::cout << "preparing workspace: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
 #endif
 
     for (size_t batch = 0; batch < batch_size; ++batch) {
-#ifdef GEMM_DBEUG
+#ifdef GEMM_DEBUG
         timer.reset();
 #endif
         float *A_fp32_ptr = reinterpret_cast<float*>(params.A.dataWithOffset(batch * m * k));
         hie::bfloat16* B_bf16_ptr = reinterpret_cast<hie::bfloat16*>(weight_workspace_ptr->dataWithOffset(batch * k * n));
         float *C_fp32_ptr = reinterpret_cast<float*>(output->dataWithOffset(batch * m * n));
-#ifdef GEMM_DBEUG
-        std::cout << "prepare ptr: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+#ifdef GEMM_DEBUG
+        timer_recorder_.record(std::string("gemm_prepare_batch_data")  + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+        // std::cout << "prepare ptr: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
         timer.reset();
 #endif
         gemm_kernel_.gemm_kernel_arm(m, n, k, lda, A_fp32_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
-#ifdef GEMM_DBEUG
-        std::cout << "[!] gemm kernel: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+#ifdef GEMM_DEBUG
+        timer_recorder_.record(std::string("gemm_kernel") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+        // std::cout << "[!] gemm kernel: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
 #endif
         // for (size_t i = 0; i < m; ++i) {
         //     for (size_t j = 0; j < n; ++j) {
@@ -146,5 +149,12 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
 
     return std::move(output);
 }
+
+#ifdef GEMM_DEBUG
+TimerRecorder ArmCpuDevice::timer_recorder_ = TimerRecorder();
+void ArmCpuDevice::print_time() {
+    timer_recorder_.print();
+}
+#endif
 
 }  // namespace fastertransformer

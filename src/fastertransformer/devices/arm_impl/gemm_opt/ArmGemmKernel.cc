@@ -67,16 +67,16 @@ void GemmKernel::gemm_kernel_arm(int            M,
                                  int            actType,
                                  void*          workspace) {
 
-#ifdef GEMM_DBEUG
-    std::cout << "gemm_thread_strategy: M=" << M << ", N=" << N << ", K=" << K << ", lda=" << lda
-              << ", actType=" << actType << "\n";
-#endif
+// #ifdef GEMM_DEBUG
+//     std::cout << "gemm_thread_strategy: M=" << M << ", N=" << N << ", K=" << K << ", lda=" << lda
+//               << ", actType=" << actType << "\n";
+// #endif
     int K_pack    = std::ceil(K / 8.0) * 8;  // k 向上取整到8的倍数
     int with_bias = bias_fp32 == nullptr ? 0 : 1;
 
     hie::bfloat16* a_bf16 = reinterpret_cast<hie::bfloat16*>(workspace);
     int            a_bf16_size = (M * K_pack + M % 2 * K_pack) * 2;  // 括号内确保对齐需要额外增加的存储空间，M是奇数的时候多加一行K_pack, * 2是因为sizeof(bf16) = 2
-    memset(a_bf16, 0, a_bf16_size);
+    // memset(a_bf16, 0, a_bf16_size);
 
     pack_input_arm(M, N, K, lda, K_pack, a_fp32, a_bf16);
 

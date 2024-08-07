@@ -1,11 +1,13 @@
 #include <arm_sve.h>
 #include <cstring>
+#ifdef DEBUG
+#include <iomanip>
+#endif
 
 #include "ArmGemmKernel.h"
 #include "gemm_microkernel_macro_m8_bf16.h"
 #include "activation_const.hpp"
 #include "arm_common.h"
-
 namespace fastertransformer {
 
 void GemmKernel::gemm_thread_block_bf16(
@@ -48,7 +50,9 @@ void GemmKernel::gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16
 
     int m_max = (p.M + m_tile - 1) / m_tile;
     int n_max = (p.N + n_tile - 1) / n_tile;
-    parallel_for(m_max, n_max, [&](int m, int n) { gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile); });
+    parallel_for(m_max, n_max, [&](int m, int n) {
+        gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile);
+    });
     return;
 }
 
@@ -63,15 +67,15 @@ void GemmKernel::gemm_kernel_arm(int            M,
                                  int            actType,
                                  void*          workspace) {
 
+#ifdef GEMM_DBEUG
     std::cout << "gemm_thread_strategy: M=" << M << ", N=" << N << ", K=" << K << ", lda=" << lda
               << ", actType=" << actType << "\n";
+#endif
     int K_pack    = std::ceil(K / 8.0) * 8;  // k 向上取整到8的倍数
     int with_bias = bias_fp32 == nullptr ? 0 : 1;
 
     hie::bfloat16* a_bf16 = reinterpret_cast<hie::bfloat16*>(workspace);
-    int            a_bf16_size =
-        (M * K_pack + M % 2 * K_pack)
-        * 2;  // 括号内确保对齐需要额外增加的存储空间，M是奇数的时候多加一行K_pack, * 2是因为sizeof(bf16) = 2
+    int            a_bf16_size = (M * K_pack + M % 2 * K_pack) * 2;  // 括号内确保对齐需要额外增加的存储空间，M是奇数的时候多加一行K_pack, * 2是因为sizeof(bf16) = 2
     memset(a_bf16, 0, a_bf16_size);
 
     pack_input_arm(M, N, K, lda, K_pack, a_fp32, a_bf16);
@@ -96,7 +100,7 @@ void GemmKernel::gemm_pack_weight_FP32toBF16_arm(int N, int K, int K_pack, const
         for (int n = 0; n < N; n += 2) {
             float*         b_fp32_ptr1 = (float*)b_fp32 + k * k_tile * N + n + 0;
             float*         b_fp32_ptr2 = (float*)b_fp32 + k * k_tile * N + n + 1;
-            hie::bfloat16* b_bf16_ptr  = b_bf16 + n * K_pack + k * k_tile * 2;
+            hie::bfloat16* b_bf16_ptr  = b_bf16 + n * K_pack + k * k_tile * 2; // [n, k*k_tile*2]
             int            kk_max      = (k + 1) * k_tile < K ? (k + 1) * k_tile : K;
             for (int kk = k * k_tile; kk < kk_max; kk += 4) {
                 for (int i = 0; i < 4 && (kk + i < kk_max); i++) {
@@ -111,6 +115,33 @@ void GemmKernel::gemm_pack_weight_FP32toBF16_arm(int N, int K, int K_pack, const
             }
         }
     });
+
+#ifdef DEBUG
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < K; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            printf("%f ", b_fp32[j * N + i]);
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+
+    auto N_aligned = N / 2 + (N % 2);
+    for (int i = 0; i < N_aligned; i++) {
+        for (int j = 0; j < K_pack * 2; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            std::cout << std::setiosflags(std::ios::fixed) << std::setprecision(6) << b_bf16[i * K_pack * 2 + j] << " ";
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+#endif
 
     return;
 }
@@ -214,6 +245,33 @@ void GemmKernel::pack_input_impl_parallel_simd(
               "z1", "z2", "cc", "memory");
         // clang-format on
     });
+
+#ifdef DEBUG
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < K; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            printf("%f ", a_fp32[i * lda + j]);
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+
+    auto M_aligned = M + (M % 2);
+    for (int i = 0; i < M_aligned / 2; i++) {
+        for (int j = 0; j < K_pack * 2; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            std::cout << a_bf16[i * K_pack * 2 + j] << " ";
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+#endif
 
     return;
 }

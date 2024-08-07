@@ -6,11 +6,13 @@
 #pragma once
 #include <iostream>
 #include <vector>
+#define RTP_RUNTIME_THREAD 1
+#define RTP_OMP 1
 #if RTP_RUNTIME_THREAD == RTP_OMP
 #include <omp.h>
 #endif
 
-#define AS_OPENMP_MANUAL_STATIC_SPLIT 0  // if use manual split, other wise, use openmp native method.
+#define RTP_OPENMP_MANUAL_STATIC_SPLIT 0  // if use manual split, other wise, use openmp native method.
 
 namespace fastertransformer {
 
@@ -112,7 +114,7 @@ void parallel(int work_amount, F f) {
 
 template<typename T0, typename F>
 void parallel_for(const T0& D0, const F& func) {
-#if AS_OPENMP_MANUAL_STATIC_SPLIT
+#if RTP_OPENMP_MANUAL_STATIC_SPLIT
     parallel(D0, [&](int ithr, int nthr) {
         T0 start, end;
 #if RTP_RUNTIME_THREAD == RTP_OMP
@@ -135,7 +137,7 @@ void parallel_for(const T0& D0, const F& func) {
 
 template<typename T0, typename T1, typename F>
 void parallel_for(const T0& D0, const T1& D1, const F& func) {
-#if AS_OPENMP_MANUAL_STATIC_SPLIT
+#if RTP_OPENMP_MANUAL_STATIC_SPLIT
     const int work_amount = (int)D0 * D1;
     parallel(work_amount, [&](int ithr, int nthr) {
         int start, end;

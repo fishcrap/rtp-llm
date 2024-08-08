@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <arm_sve.h>
 
 #define ROUND_MODE_TO_NEAREST_EVEN
 
@@ -121,6 +122,10 @@ struct HIE_ALIGN(2) __Bf16Impl {
         return float2bfloat16(static_cast<float>(v));
     }
 
+    static __Bf16Impl float162bfloat16(float16_t v) {
+        return float2bfloat16(static_cast<float>(v));
+    }
+
     // from bf16 to float
     static float bfloat162float(__Bf16Impl v) {
         std::uint32_t val  = static_cast<uint32_t>(v.__x) << 16;
@@ -154,6 +159,10 @@ struct HIE_ALIGN(2) __Bf16Impl {
 
     static unsigned short bfloat162ushort(__Bf16Impl v) {
         return static_cast<unsigned short>(bfloat162float(v));
+    }
+
+    static float16_t bfloat162float16(__Bf16Impl v) {
+        return static_cast<float16_t>(bfloat162float(v));
     }
 
     // + - * /

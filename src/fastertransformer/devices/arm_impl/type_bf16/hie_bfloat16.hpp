@@ -115,6 +115,11 @@ struct bfloat16 {
         __x = __Bf16Impl::short2bfloat16(static_cast<short>(v));
     }
 
+    // convert to extended types
+    __BF16_DEVICE_FUNC bfloat16(float16_t v) {
+        __x = __Bf16Impl::float162bfloat16(v);
+    }
+
     // convert to build-in types
     __BF16_DEVICE_FUNC operator float() const {
         return __Bf16Impl::bfloat162float(__x);
@@ -170,6 +175,11 @@ struct bfloat16 {
 
     __BF16_DEVICE_FUNC operator bool() const {
         return (reinterpret_cast<const std::uint16_t&>(__x) & 0x7fff) != 0;
+    }
+
+    //convert from other extended types
+    __BF16_DEVICE_FUNC operator float16_t() const {
+        return __Bf16Impl::bfloat162float16(__x);
     }
 
     friend std::ostream& operator<<(std::ostream& out, const bfloat16& obj) {

@@ -5,6 +5,7 @@
 #include "arm_compute/runtime/NEON/NEFunctions.h"
 #include "arm_compute/runtime/Scheduler.h"
 #include "gemm_opt/ArmGemmKernel.h"
+#include "src/fastertransformer/devices/utils/Timer.h"
 
 namespace fastertransformer {
 
@@ -33,11 +34,18 @@ public:
     void sampleBeamSearch(const BeamSearchParams& params);
     void broadcast(const BroadcastParams& params);
     void allReduceSum(const AllReduceParams& params);
+#ifdef GEMM_DEBUG
+    static void print_time();
+#endif
 
 private:
     std::unique_ptr<IAllocator> allocator_;
     arm_compute::DataType getAclDataType(DataType type);
     GemmKernel gemm_kernel_;
+
+#ifdef GEMM_DEBUG
+    static TimerRecorder timer_recorder_;
+#endif
 };
 
 } // namespace fastertransformer

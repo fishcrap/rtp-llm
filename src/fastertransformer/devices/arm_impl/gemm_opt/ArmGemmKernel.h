@@ -1,5 +1,6 @@
 #pragma once
 #include "../type_bf16/hie_bfloat16.hpp"
+#include <arm_sve.h>
 
 namespace fastertransformer {
 
@@ -75,6 +76,7 @@ enum UnaryType : int {
 class GemmKernel {
 private:
     void pack_input_impl_parallel_simd(int M, int N, int K, int lda, int K_pack, float* a_fp32, hie::bfloat16* a_bf16);
+    void pack_input_fp16tobf16_impl_parallel_simd(int M, int N, int K, int lda, int K_pack, float16_t* a_fp16, hie::bfloat16* a_bf16);
 
     void thread_block_bf16_m8(GemmPartParam<hie::bfloat16, hie::bfloat16, float>& p, int m, int n, int k, int k_tile);
     void
@@ -95,6 +97,8 @@ private:
 public:
     void gemm_pack_weight_FP32toBF16_arm(int N, int K, int K_pack, const float* b_fp32, hie::bfloat16* b_bf16);
 
+    void gemm_pack_weight_FP16toBF16_arm(int N, int K, int K_pack, const float16_t* b_fp16, hie::bfloat16* b_bf16);
+
     void gemm_kernel_arm(int            M,
                          int            N,
                          int            K,
@@ -105,6 +109,17 @@ public:
                          float*         bias_fp32,
                          int            actType,
                          void*          workspace);
+
+    void gemm_kernel_arm_fp16(int            M,
+                              int            N,
+                              int            K,
+                              int            lda,
+                              float16_t*     a_fp16,
+                              hie::bfloat16* b_bf16,
+                              float*         c_fp32,
+                              float*         bias_fp32,
+                              int            actType,
+                              void*          workspace);
 };
 
 }  // namespace fastertransformer

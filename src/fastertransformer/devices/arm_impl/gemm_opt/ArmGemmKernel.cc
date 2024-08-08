@@ -1,5 +1,6 @@
 #include <arm_sve.h>
 #include <cstring>
+// #define DEBUG
 #ifdef DEBUG
 #include <iomanip>
 #endif
@@ -87,6 +88,38 @@ void GemmKernel::gemm_kernel_arm(int            M,
     return;
 }
 
+void GemmKernel::gemm_kernel_arm_fp16(int            M,
+                                      int            N,
+                                      int            K,
+                                      int            lda,
+                                      float16_t*     a_fp16,
+                                      hie::bfloat16* b_bf16,
+                                      float*         c_fp32,
+                                      float*         bias_fp32,
+                                      int            actType,
+                                      void*          workspace) {
+
+// #ifdef GEMM_DEBUG
+//     std::cout << "gemm_thread_strategy: M=" << M << ", N=" << N << ", K=" << K << ", lda=" << lda
+//               << ", actType=" << actType << "\n";
+// #endif
+    int K_pack    = std::ceil(K / 8.0) * 8;  // k 向上取整到8的倍数
+    int with_bias = bias_fp32 == nullptr ? 0 : 1;
+
+    hie::bfloat16* a_bf16 = reinterpret_cast<hie::bfloat16*>(workspace);
+    int            a_bf16_size = (M * K_pack + M % 2 * K_pack) * 2;  // 括号内确保对齐需要额外增加的存储空间，M是奇数的时候多加一行K_pack, * 2是因为sizeof(bf16) = 2
+    // memset(a_bf16, 0, a_bf16_size);
+
+    pack_input_fp16tobf16_impl_parallel_simd(M, N, K, lda, K_pack, a_fp16, a_bf16);
+
+    GemmPartParam<hie::bfloat16, hie::bfloat16, float> p(
+        M, N, K_pack, a_bf16, b_bf16, c_fp32, bias_fp32, with_bias, actType);
+
+    gemm_thread_strategy(p);
+    return;
+}
+
+
 void GemmKernel::pack_input_arm(int M, int N, int K, int lda, int K_pack, float* a_fp32, hie::bfloat16* a_bf16) {
     pack_input_impl_parallel_simd(M, N, K, lda, K_pack, a_fp32, a_bf16);
     return;
@@ -146,6 +179,216 @@ void GemmKernel::gemm_pack_weight_FP32toBF16_arm(int N, int K, int K_pack, const
     return;
 }
 
+
+void GemmKernel::gemm_pack_weight_FP16toBF16_arm(int N, int K, int K_pack, const float16_t* b_fp16, hie::bfloat16* b_bf16) {
+    int k_tile   = 1024;  // empirical var: 1024, 5120
+    int k_thread = std::ceil(K_pack * 1.0 / k_tile);
+
+    parallel_for(k_thread, [&](int k) {
+        for (int n = 0; n < N; n += 2) {
+            float16_t*     b_fp16_ptr1 = (float16_t*)b_fp16 + k * k_tile * N + n + 0;
+            float16_t*     b_fp16_ptr2 = (float16_t*)b_fp16 + k * k_tile * N + n + 1;
+            hie::bfloat16* b_bf16_ptr  = b_bf16 + n * K_pack + k * k_tile * 2; // [n, k*k_tile*2]
+            int            kk_max      = (k + 1) * k_tile < K ? (k + 1) * k_tile : K;
+            for (int kk = k * k_tile; kk < kk_max; kk += 4) {
+                for (int i = 0; i < 4 && (kk + i < kk_max); i++) {
+                    b_bf16_ptr[i] = b_fp16_ptr1[i * N];
+                    if (n != (N - 1)) {
+                        b_bf16_ptr[i + 4] = b_fp16_ptr2[i * N];
+                    }
+                }
+                b_bf16_ptr += 8;
+                b_fp16_ptr1 += 4 * N;
+                b_fp16_ptr2 += 4 * N;
+            }
+        }
+    });
+
+
+#ifdef DEBUG
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < K; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            std::cout << b_fp16[j * N + i] << " ";
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+
+    auto N_aligned = N / 2 + (N % 2);
+    for (int i = 0; i < N_aligned; i++) {
+        for (int j = 0; j < K_pack * 2; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            std::cout << std::setiosflags(std::ios::fixed) << std::setprecision(6) << b_bf16[i * K_pack * 2 + j] << " ";
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+#endif
+
+    return;
+}
+
+
+void GemmKernel::pack_input_fp16tobf16_impl_parallel_simd(
+    int M, int N, int K, int lda, int K_pack, float16_t* a_fp16, hie::bfloat16* a_bf16) {
+#define LABEL_FOR_LOOP_M "0"
+#define LABEL_FOR_LOOP_K "1"
+#define LABEL_m_EQ_M_1 "2"
+    int k_tile   = 1024;  // empirical var: 1024, 5120
+    int k_thread = std::ceil(K * 1.0 / k_tile);
+
+    // printf("k_tile: %d, k_thread: %d\n", k_tile, k_thread);
+
+    // fp32 [ a[i,  j+0], a[i,  j+1], a[i,  j+2], a[i,  j+3] ]
+    // fp32 [ a[i+1,j+0], a[i+1,j+1], a[i+1,j+2], a[i+1,j+3] ]
+    // bf16 [ a[i,  j+0], a[i,  j+1], a[i,  j+2], a[i,  j+3],
+    //        a[i+1,j+0], a[i+1,j+1], a[i+1,j+2], a[i+1,j+3]]
+
+    parallel_for(k_thread, [&](int k) {
+        float16_t*     a_fp16_ptr1   = a_fp16 + 0 * lda + k * k_tile;
+        float16_t*     a_fp16_ptr2   = a_fp16 + 1 * lda + k * k_tile;
+        hie::bfloat16* a_bf16_ptr    = a_bf16 + k * k_tile * 2;
+        int            a_fp16_offset = 2 * lda * sizeof(float16_t);
+        int            a_bf16_offset = 2 * K_pack * sizeof(hie::bfloat16);
+        int            kk            = k * k_tile;
+        int            kk_max        = (k + 1) * k_tile < K ? (k + 1) * k_tile : K;
+
+        // clang-format off
+        asm volatile(
+            "ptrue   p0.b                                    \n"
+            "sub     x1,    %[M], #1                         \n"  // M - 1
+            "mov     x2,    #0                               \n"  // m
+
+            "" LABEL_FOR_LOOP_M
+            ":\n"
+            "mov     x3,    %[a_fp16_ptr1]                   \n"
+            "mov     x4,    %[a_fp16_ptr2]                   \n"
+            "mov     x5,    %[a_bf16_ptr]                    \n"
+
+            "prfw    pldl1strm, p0, [x3,    #0, MUL VL]      \n"  // prefetch
+            "prfw    pldl1strm, p0, [x4,    #0, MUL VL]      \n"
+
+            "mov     x0,    %[kk]                            \n"
+            "whilelt p1.h,  x0,   %[kk_max]                  \n"  // compare kk
+                                                                  // and kk_max
+
+            "" LABEL_FOR_LOOP_K
+            ":\n"
+            "ld1h   z4.h, p1/z, [x3,    #0, MUL VL]          \n" // load 8 fp16
+            "dup    z6.h, #0                                 \n"
+            "zip1   z0.h, z4.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
+            // "zip2   z1.h, z4.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
+            "fcvt   z0.s, p0/m, z0.h                         \n"  // fp16 -> fp32
+            "dup    z2.h, #0                                 \n"
+            "cmp    x2, x1                                   \n"  // compare m,
+                                                                  // M - 1
+            // "fcvt   z1.s, p0/m, z1.h                         \n"  // fp16 -> fp32
+            // "dup    z3.h, #0                                 \n"
+            "b.none  " LABEL_m_EQ_M_1
+            "f                     \n"
+            "ld1h   z5.h, p1/z, [x4,    #0, MUL VL]          \n"  // load, when
+                                                                  // m != M - 1
+            "zip1   z2.h, z5.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
+            // "zip2   z3.h, z5.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
+            "fcvt   z2.s, p0/m, z2.h                         \n"  // fp16 -> fp32
+            // "fcvt   z3.s, p0/m, z3.h                         \n"  // fp16 -> fp32
+
+            "" LABEL_m_EQ_M_1
+            ":\n"
+            // "add     x3, x3, #16                             \n"  // a_fp16_ptr1 += 8
+            // "add     x4, x4, #16                             \n"  // a_fp16_ptr2 += 8
+            "add     x3, x3, #8                              \n"  // a_fp16_ptr1 += 4
+            "add     x4, x4, #8                              \n"  // a_fp16_ptr2 += 4
+
+            "prfw    pldl1strm, p0, [x3,    #0, MUL VL]      \n"
+            "prfw    pldl1strm, p0, [x4,    #0, MUL VL]      \n"
+
+            "bfcvt   z0.h, p0/m, z0.s                        \n"  // fp32 ->
+                                                                  // bf16
+            // "bfcvt   z1.h, p0/m, z1.s                        \n"
+            "bfcvt   z2.h, p0/m, z2.s                        \n"
+            // "bfcvt   z3.h, p0/m, z3.s                        \n"
+
+            "uzp1    z4.h, z0.h, z2.h                        \n"  // combine
+                                                                  // bf16
+            // "uzp1    z5.h, z1.h, z3.h                        \n"  // combine bf16
+            "zip1    p3.d, p1.d, p1.d                        \n"  // cp 4 least significant half to 4 most significant half
+            ""
+            "st1h    z4.h, p3,   [x5, #0, MUL VL]            \n"  // store bf16 data
+
+            // "zip2    p3.d, p1.d, p1.d                        \n"  // cp 4 most significant half to 4 least significant half
+            // "st1h    z5.h, p3,   [x5, #1, MUL VL]            \n"  // store bf16
+            // "add     x5, x5, #32                             \n"  // a_bf16_ptr += 16
+            "add     x5, x5, #16                             \n"  // a_bf16_ptr += 8
+
+            //   "prfw    pstl1keep, p0, [x5,    #0, MUL VL]      \n"
+
+            // "add     x0,    x0,   #8                         \n"  // kk += 8
+            "add     x0,    x0,   #4                         \n"  // kk += 4
+            "whilelt p1.h,  x0,   %[kk_max]                  \n"  // compare kk
+                                                                  // and kk_max
+            "b.tstop " LABEL_FOR_LOOP_K
+            "b                   \n"  // if k < K_MAX, go to label
+
+            "add     %[a_fp16_ptr1], %[a_fp16_ptr1], %[a_fp16_offset] \n"
+            "add     %[a_fp16_ptr2], %[a_fp16_ptr2], %[a_fp16_offset] \n"
+            "add     %[a_bf16_ptr],  %[a_bf16_ptr],  %[a_bf16_offset] \n"
+            "add     x2,    x2,   #2                         \n"  // m += 2
+            "cmp     x2, %[M]                                \n"  // compare m,
+                                                                  // M
+            "b.tstop " LABEL_FOR_LOOP_M
+            "b                   \n"  // if m < M, go to label
+
+            : /* empty OutputOperands */
+            : [a_fp16_ptr1] "r"(a_fp16_ptr1), [a_fp16_ptr2] "r"(a_fp16_ptr2),
+              [a_bf16_ptr] "r"(a_bf16_ptr), [kk] "r"(kk), [kk_max] "r"(kk_max),
+              [M] "r"(M), [a_fp16_offset] "r"(a_fp16_offset),
+              [a_bf16_offset] "r"(a_bf16_offset)
+            : "x0", "x1", "x2", "x3", "x4", "x5",
+              "p0", "p1", "p2", "p3",
+              "z0", "z1", "z2", "z3", "z4", "z5", "z6",
+              "cc", "memory");
+        // clang-format on
+    });
+
+#ifdef DEBUG
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < K; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            printf("%f ", a_fp16[i * lda + j]);
+            // std::cout << a_fp16[i * lda + j] << " ";
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+
+    auto M_aligned = M + (M % 2);
+    for (int i = 0; i < M_aligned / 2; i++) {
+        for (int j = 0; j < K_pack * 2; j++) {
+            if (j % 8 == 0) {
+                printf("\n");
+            }
+            std::cout << a_bf16[i * K_pack * 2 + j] << " ";
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+#endif
+
+    return;
+}
+
 void GemmKernel::pack_input_impl_parallel_simd(
     int M, int N, int K, int lda, int K_pack, float* a_fp32, hie::bfloat16* a_bf16) {
 #define LABEL_FOR_LOOP_M "0"
@@ -182,7 +425,7 @@ void GemmKernel::pack_input_impl_parallel_simd(
             "mov     x4,    %[a_fp32_ptr2]                   \n"
             "mov     x5,    %[a_bf16_ptr]                    \n"
 
-            "prfw    pldl1strm, p0, [x3,    #0, MUL VL]      \n"
+            "prfw    pldl1strm, p0, [x3,    #0, MUL VL]      \n"  // prefetch
             "prfw    pldl1strm, p0, [x4,    #0, MUL VL]      \n"
 
             "mov     x0,    %[kk]                            \n"

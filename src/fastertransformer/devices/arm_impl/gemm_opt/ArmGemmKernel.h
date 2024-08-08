@@ -102,6 +102,7 @@ public:
     void gemm_kernel_arm(int            M,
                          int            N,
                          int            K,
+                         int            k_pack,
                          int            lda,
                          float*         a_fp32,
                          hie::bfloat16* b_bf16,
@@ -110,16 +111,17 @@ public:
                          int            actType,
                          void*          workspace);
 
-    void gemm_kernel_arm_fp16(int            M,
-                              int            N,
-                              int            K,
-                              int            lda,
-                              float16_t*     a_fp16,
-                              hie::bfloat16* b_bf16,
-                              float*         c_fp32,
-                              float*         bias_fp32,
-                              int            actType,
-                              void*          workspace);
+    void gemm_kernel_arm(int            M,
+                         int            N,
+                         int            K,
+                         int            k_pack,
+                         int            lda,
+                         float16_t*     a_fp16,
+                         hie::bfloat16* b_bf16,
+                         float*         c_fp32,
+                         float*         bias_fp32,
+                         int            actType,
+                         void*          workspace);
 };
 
 }  // namespace fastertransformer

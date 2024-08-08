@@ -60,6 +60,7 @@ void GemmKernel::gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16
 void GemmKernel::gemm_kernel_arm(int            M,
                                  int            N,
                                  int            K,
+                                 int            k_pack,
                                  int            lda,
                                  float*         a_fp32,
                                  hie::bfloat16* b_bf16,
@@ -72,7 +73,7 @@ void GemmKernel::gemm_kernel_arm(int            M,
 //     std::cout << "gemm_thread_strategy: M=" << M << ", N=" << N << ", K=" << K << ", lda=" << lda
 //               << ", actType=" << actType << "\n";
 // #endif
-    int K_pack    = std::ceil(K / 8.0) * 8;  // k 向上取整到8的倍数
+    int K_pack    = k_pack;
     int with_bias = bias_fp32 == nullptr ? 0 : 1;
 
     hie::bfloat16* a_bf16 = reinterpret_cast<hie::bfloat16*>(workspace);
@@ -88,22 +89,23 @@ void GemmKernel::gemm_kernel_arm(int            M,
     return;
 }
 
-void GemmKernel::gemm_kernel_arm_fp16(int            M,
-                                      int            N,
-                                      int            K,
-                                      int            lda,
-                                      float16_t*     a_fp16,
-                                      hie::bfloat16* b_bf16,
-                                      float*         c_fp32,
-                                      float*         bias_fp32,
-                                      int            actType,
-                                      void*          workspace) {
+void GemmKernel::gemm_kernel_arm(int            M,
+                                 int            N,
+                                 int            K,
+                                 int            k_pack,
+                                 int            lda,
+                                 float16_t*     a_fp16,
+                                 hie::bfloat16* b_bf16,
+                                 float*         c_fp32,
+                                 float*         bias_fp32,
+                                 int            actType,
+                                 void*          workspace) {
 
 // #ifdef GEMM_DEBUG
 //     std::cout << "gemm_thread_strategy: M=" << M << ", N=" << N << ", K=" << K << ", lda=" << lda
 //               << ", actType=" << actType << "\n";
 // #endif
-    int K_pack    = std::ceil(K / 8.0) * 8;  // k 向上取整到8的倍数
+    int K_pack    = k_pack;
     int with_bias = bias_fp32 == nullptr ? 0 : 1;
 
     hie::bfloat16* a_bf16 = reinterpret_cast<hie::bfloat16*>(workspace);
@@ -284,54 +286,54 @@ void GemmKernel::pack_input_fp16tobf16_impl_parallel_simd(
             "ld1h   z4.h, p1/z, [x3,    #0, MUL VL]          \n" // load 8 fp16
             "dup    z6.h, #0                                 \n"
             "zip1   z0.h, z4.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
-            // "zip2   z1.h, z4.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
+            "zip2   z1.h, z4.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
             "fcvt   z0.s, p0/m, z0.h                         \n"  // fp16 -> fp32
             "dup    z2.h, #0                                 \n"
+            "fcvt   z1.s, p0/m, z1.h                         \n"  // fp16 -> fp32
+            "dup    z3.h, #0                                 \n"
             "cmp    x2, x1                                   \n"  // compare m,
                                                                   // M - 1
-            // "fcvt   z1.s, p0/m, z1.h                         \n"  // fp16 -> fp32
-            // "dup    z3.h, #0                                 \n"
             "b.none  " LABEL_m_EQ_M_1
             "f                     \n"
             "ld1h   z5.h, p1/z, [x4,    #0, MUL VL]          \n"  // load, when
                                                                   // m != M - 1
             "zip1   z2.h, z5.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
-            // "zip2   z3.h, z5.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
+            "zip2   z3.h, z5.h, z6.h                         \n"  // zip 4(or less) fp16 values with 0
             "fcvt   z2.s, p0/m, z2.h                         \n"  // fp16 -> fp32
-            // "fcvt   z3.s, p0/m, z3.h                         \n"  // fp16 -> fp32
+            "fcvt   z3.s, p0/m, z3.h                         \n"  // fp16 -> fp32
 
             "" LABEL_m_EQ_M_1
             ":\n"
-            // "add     x3, x3, #16                             \n"  // a_fp16_ptr1 += 8
-            // "add     x4, x4, #16                             \n"  // a_fp16_ptr2 += 8
-            "add     x3, x3, #8                              \n"  // a_fp16_ptr1 += 4
-            "add     x4, x4, #8                              \n"  // a_fp16_ptr2 += 4
+            "add     x3, x3, #16                             \n"  // a_fp16_ptr1 += 8
+            "add     x4, x4, #16                             \n"  // a_fp16_ptr2 += 8
+            // "add     x3, x3, #8                              \n"  // a_fp16_ptr1 += 4
+            // "add     x4, x4, #8                              \n"  // a_fp16_ptr2 += 4
 
             "prfw    pldl1strm, p0, [x3,    #0, MUL VL]      \n"
             "prfw    pldl1strm, p0, [x4,    #0, MUL VL]      \n"
 
             "bfcvt   z0.h, p0/m, z0.s                        \n"  // fp32 ->
                                                                   // bf16
-            // "bfcvt   z1.h, p0/m, z1.s                        \n"
+            "bfcvt   z1.h, p0/m, z1.s                        \n"
             "bfcvt   z2.h, p0/m, z2.s                        \n"
-            // "bfcvt   z3.h, p0/m, z3.s                        \n"
+            "bfcvt   z3.h, p0/m, z3.s                        \n"
 
             "uzp1    z4.h, z0.h, z2.h                        \n"  // combine
                                                                   // bf16
-            // "uzp1    z5.h, z1.h, z3.h                        \n"  // combine bf16
+            "uzp1    z5.h, z1.h, z3.h                        \n"  // combine bf16
             "zip1    p3.d, p1.d, p1.d                        \n"  // cp 4 least significant half to 4 most significant half
             ""
             "st1h    z4.h, p3,   [x5, #0, MUL VL]            \n"  // store bf16 data
 
-            // "zip2    p3.d, p1.d, p1.d                        \n"  // cp 4 most significant half to 4 least significant half
-            // "st1h    z5.h, p3,   [x5, #1, MUL VL]            \n"  // store bf16
-            // "add     x5, x5, #32                             \n"  // a_bf16_ptr += 16
-            "add     x5, x5, #16                             \n"  // a_bf16_ptr += 8
+            "zip2    p3.d, p1.d, p1.d                        \n"  // cp 4 most significant half to 4 least significant half
+            "st1h    z5.h, p3,   [x5, #1, MUL VL]            \n"  // store bf16
+            "add     x5, x5, #32                             \n"  // a_bf16_ptr += 16
+            // "add     x5, x5, #16                             \n"  // a_bf16_ptr += 8
 
             //   "prfw    pstl1keep, p0, [x5,    #0, MUL VL]      \n"
 
-            // "add     x0,    x0,   #8                         \n"  // kk += 8
-            "add     x0,    x0,   #4                         \n"  // kk += 4
+            "add     x0,    x0,   #8                         \n"  // kk += 8
+            // "add     x0,    x0,   #4                         \n"  // kk += 4
             "whilelt p1.h,  x0,   %[kk_max]                  \n"  // compare kk
                                                                   // and kk_max
             "b.tstop " LABEL_FOR_LOOP_K

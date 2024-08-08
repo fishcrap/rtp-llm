@@ -56,7 +56,7 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
     auto data_type = params.compute_type == DataType::TYPE_INVALID ? params.A.type() : params.compute_type;
     if (data_type != params.A.type()) {
         std::cout << "[Warning] GEMM compute type differs from input type. Not supported" << std::endl;
-        data_type = params.A.type();
+        // data_type = params.A.type();
     }
 
     Dshape = std::vector<size_t>(Ashape.begin(), Ashape.end() - 2);
@@ -94,7 +94,7 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
     BufferPtr weight_workspace;
     const Buffer *weight_workspace_ptr = nullptr;
 
-    if (params.B.type() == DataType::TYPE_FP32) {
+    if (params.B.type() == DataType::TYPE_FP32 || params.B.type() == DataType::TYPE_FP16) {
         // allocate a temp workspace to pack weight fp32->bf16
         size_t width = k_pack * 2;
         size_t height = n / 2 + n % 2;
@@ -105,9 +105,14 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
         weight_workspace_ptr = weight_workspace.get();
         // pack weight
         for (size_t batch = 0; batch < batch_size; ++batch) {
-            float* B_fp32_ptr = reinterpret_cast<float*>(params.B.dataWithOffset(batch * k * n));
             hie::bfloat16* weight_workspace_cur_ptr = reinterpret_cast<hie::bfloat16*>(weight_workspace->dataWithOffset(batch * height * width));
-            gemm_kernel_.gemm_pack_weight_FP32toBF16_arm(n, k, k_pack, B_fp32_ptr, weight_workspace_cur_ptr);
+            if (params.B.type() == DataType::TYPE_FP32) {
+                float* B_fp32_ptr = reinterpret_cast<float*>(params.B.dataWithOffset(batch * k * n));
+                gemm_kernel_.gemm_pack_weight_FP32toBF16_arm(n, k, k_pack, B_fp32_ptr, weight_workspace_cur_ptr);
+            } else { // if(params.B.type() == DataType::TYPE_FP16) 
+                float16_t* B_fp16_ptr = reinterpret_cast<float16_t*>(params.B.dataWithOffset(batch * k * n));
+                gemm_kernel_.gemm_pack_weight_FP16toBF16_arm(n, k, k_pack, B_fp16_ptr, weight_workspace_cur_ptr);
+            }
         }
     } else if(params.B.type() == DataType::TYPE_BF16) {
         weight_workspace_ptr = &(params.B);
@@ -125,19 +130,45 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
 #ifdef GEMM_DEBUG
         timer.reset();
 #endif
-        float *A_fp32_ptr = reinterpret_cast<float*>(params.A.dataWithOffset(batch * m * k));
+
         hie::bfloat16* B_bf16_ptr = reinterpret_cast<hie::bfloat16*>(weight_workspace_ptr->dataWithOffset(batch * k * n));
-        float *C_fp32_ptr = reinterpret_cast<float*>(output->dataWithOffset(batch * m * n));
+        float* C_fp32_ptr = reinterpret_cast<float*>(output->dataWithOffset(batch * m * n));
+        if (params.A.type() == DataType::TYPE_FP32) {
+            float* A_fp32_ptr = reinterpret_cast<float*>(params.A.dataWithOffset(batch * m * k));
+
 #ifdef GEMM_DEBUG
-        timer_recorder_.record(std::string("gemm_prepare_batch_data")  + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
-        // std::cout << "prepare ptr: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
-        timer.reset();
+            timer_recorder_.record(std::string("gemm_prepare_batch_data")  + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+            // std::cout << "prepare ptr: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+            timer.reset();
 #endif
-        gemm_kernel_.gemm_kernel_arm(m, n, k, lda, A_fp32_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
+
+            gemm_kernel_.gemm_kernel_arm(m, n, k, lda, A_fp32_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
+
 #ifdef GEMM_DEBUG
-        timer_recorder_.record(std::string("gemm_kernel") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
-        // std::cout << "[!] gemm kernel: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+            timer_recorder_.record(std::string("gemm_kernel") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+            // std::cout << "[!] gemm kernel: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
 #endif
+
+        } else if(params.A.type() == DataType::TYPE_FP16) {
+            float16_t* A_fp16_ptr = reinterpret_cast<float16_t*>(params.A.dataWithOffset(batch * m * k));
+
+#ifdef GEMM_DEBUG
+            timer_recorder_.record(std::string("gemm_prepare_batch_data")  + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+            // std::cout << "prepare ptr: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+            timer.reset();
+#endif
+            gemm_kernel_.gemm_kernel_arm_fp16(m, n, k, lda, A_fp16_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
+
+#ifdef GEMM_DEBUG
+            timer_recorder_.record(std::string("gemm_kernel") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());
+            // std::cout << "[!] gemm kernel: " << timer.elapsed_nano() * 1e-6 << " ms" << std::endl;
+#endif
+        } else {
+            std::cerr << "Unsupported data type for A" << std::endl;
+            return nullptr;
+        }
+
+
         // for (size_t i = 0; i < m; ++i) {
         //     for (size_t j = 0; j < n; ++j) {
         //         std::cout << C_fp32_ptr[i * n + j] << " ";

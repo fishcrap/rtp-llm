@@ -88,7 +88,7 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
     size_t k_pack = std::ceil(k / 8.0) * 8;
     size_t m_aligned = m + m % 2;
     std::vector<size_t> workspace_shape = std::vector<size_t>(Ashape.begin(), Ashape.end() - 2);
-    workspace_shape.insert(workspace_shape.end(), {m_aligned, k_pack_mem});
+    workspace_shape.insert(workspace_shape.end(), {m_aligned, k_pack});
     BufferPtr workspace = allocateBuffer({DataType::TYPE_BF16, workspace_shape, AllocationType::DEVICE}, {"gemm_workspace"});
     memset(workspace->data(), 0, workspace->sizeBytes());
 

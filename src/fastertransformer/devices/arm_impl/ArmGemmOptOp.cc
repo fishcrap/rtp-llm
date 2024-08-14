@@ -135,6 +135,7 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
 
         hie::bfloat16* B_bf16_ptr = reinterpret_cast<hie::bfloat16*>(weight_workspace_ptr->dataWithOffset(batch * k * n));
         float* C_fp32_ptr = reinterpret_cast<float*>(output->dataWithOffset(batch * m * n));
+        float16_t* C_fp16_ptr = reinterpret_cast<float16_t*>(output->dataWithOffset(batch * m * n));
         if (params.A.type() == DataType::TYPE_FP32) {
             float* A_fp32_ptr = reinterpret_cast<float*>(params.A.dataWithOffset(batch * m * k));
 
@@ -161,7 +162,14 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
             timer.reset();
 #endif
             // gemm_kernel_.gemm_kernel_arm(m, n, k, k_pack, lda, A_fp16_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
-            gemm_kernel_.gemm_kernel_arm<float16_t, float>(m, n, k, k_pack, lda, A_fp16_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
+            if (data_type == DataType::TYPE_FP32) {
+                gemm_kernel_.gemm_kernel_arm<float16_t, float>(m, n, k, k_pack, lda, A_fp16_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
+            } else if (data_type == DataType::TYPE_FP16) {
+                gemm_kernel_.gemm_kernel_arm<float16_t, float16_t>(m, n, k, k_pack, lda, A_fp16_ptr, B_bf16_ptr, C_fp16_ptr, nullptr, 0, workspace->data());
+            } else {
+                std::cerr << "Unsupported data type for compute" << std::endl;
+                return nullptr;
+            }
 
 #ifdef GEMM_DEBUG
             timer_recorder_.record(std::string("gemm_kernel") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer.elapsed_nano());

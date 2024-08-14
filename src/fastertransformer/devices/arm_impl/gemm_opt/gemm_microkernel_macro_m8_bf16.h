@@ -223,6 +223,86 @@
         "zip1    z24.s, z8.s,  z9.s              \n" \
         "zip2    z25.s, z8.s,  z9.s              \n"
 
+// fp16: z10, z11, z14, z15, z18, z19, z22, z23
+#define ASM_BLOCK_REORDER_BFMMLA_OUTPUT_FP16         \
+        "ptrue   p3.b                            \n" \
+                                                     \
+        "trn1    z8.s,  z10.s, z11.s             \n" \
+        "trn2    z9.s,  z10.s, z11.s             \n" \
+        "zip1    z10.s, z8.s,  z9.s              \n" \
+        "zip2    z11.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z10.h, p3/m,  z10.s             \n" \
+        "fcvt    z11.h, p3/m,  z11.s             \n" \
+                                                     \
+        "trn1    z8.s,  z12.s, z13.s             \n" \
+        "trn2    z9.s,  z12.s, z13.s             \n" \
+        "zip1    z12.s, z8.s,  z9.s              \n" \
+        "zip2    z13.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z12.h, p3/m,  z12.s             \n" \
+        "fcvt    z13.h, p3/m,  z13.s             \n" \
+                                                     \
+        "uzp1    z10.h, z10.h, z12.h             \n" \
+        "uzp1    z11.h, z11.h, z13.h             \n" \
+                                                     \
+        "trn1    z8.s,  z14.s, z15.s             \n" \
+        "trn2    z9.s,  z14.s, z15.s             \n" \
+        "zip1    z14.s, z8.s,  z9.s              \n" \
+        "zip2    z15.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z14.h, p3/m,  z14.s             \n" \
+        "fcvt    z15.h, p3/m,  z15.s             \n" \
+                                                     \
+        "trn1    z8.s,  z16.s, z17.s             \n" \
+        "trn2    z9.s,  z16.s, z17.s             \n" \
+        "zip1    z16.s, z8.s,  z9.s              \n" \
+        "zip2    z17.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z16.h, p3/m,  z16.s             \n" \
+        "fcvt    z17.h, p3/m,  z17.s             \n" \
+                                                     \
+        "uzp1    z14.h, z14.h, z16.h             \n" \
+        "uzp1    z15.h, z15.h, z17.h             \n" \
+                                                     \
+        "trn1    z8.s,  z18.s, z19.s             \n" \
+        "trn2    z9.s,  z18.s, z19.s             \n" \
+        "zip1    z18.s, z8.s,  z9.s              \n" \
+        "zip2    z19.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z18.h, p3/m,  z18.s             \n" \
+        "fcvt    z19.h, p3/m,  z19.s             \n" \
+                                                     \
+        "trn1    z8.s,  z20.s, z21.s             \n" \
+        "trn2    z9.s,  z20.s, z21.s             \n" \
+        "zip1    z20.s, z8.s,  z9.s              \n" \
+        "zip2    z21.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z20.h, p3/m,  z20.s             \n" \
+        "fcvt    z21.h, p3/m,  z21.s             \n" \
+                                                     \
+        "uzp1    z18.h, z18.h, z20.h             \n" \
+        "uzp1    z19.h, z19.h, z21.h             \n" \
+                                                     \
+        "trn1    z8.s,  z22.s, z23.s             \n" \
+        "trn2    z9.s,  z22.s, z23.s             \n" \
+        "zip1    z22.s, z8.s,  z9.s              \n" \
+        "zip2    z23.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z22.h, p3/m,  z22.s             \n" \
+        "fcvt    z23.h, p3/m,  z23.s             \n" \
+                                                     \
+        "trn1    z8.s,  z24.s, z25.s             \n" \
+        "trn2    z9.s,  z24.s, z25.s             \n" \
+        "zip1    z24.s, z8.s,  z9.s              \n" \
+        "zip2    z25.s, z8.s,  z9.s              \n" \
+                                                     \
+        "fcvt    z24.h, p3/m,  z24.s             \n" \
+        "fcvt    z25.h, p3/m,  z25.s             \n" \
+                                                     \
+        "uzp1    z22.h, z22.h, z24.h             \n" \
+        "uzp1    z23.h, z23.h, z25.h             \n"
+
 /***********************/
 
 #define ASM_BLOCK_PREFETCH_PART_0                                \
@@ -330,6 +410,40 @@
           "z20", "z21", "z22", "z23", "z24", "z25",                             \
           "cc", "memory");
 
+#define ASM_BLOCK_C_STORE_FP16                                           \
+    asm volatile(                                                        \
+        "mov     x9,    %[c_fp16_ptr]                \n"                 \
+        "st1h    z10.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z11.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z14.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z15.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z18.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z19.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z22.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z23.h, p1,   [x9, #0, MUL VL]       \n"                 \
+        : /* empty OutputOperands */                                     \
+        : [c_fp16_ptr] "r"(c_fp16_ptr),                                  \
+          [next_line_offset] "r"(next_line_offset),                      \
+          [M] "r"(M)                                                     \
+        : "p1", "p2", "x9",                                              \
+          "z10", "z11", "z14", "z15", "z18", "z19",                      \
+          "z22", "z23",                                                  \
+          "cc", "memory");
+
 #define ASM_BLOCK_C_ACCUMULATE                                           \
     asm volatile(                                                        \
         "mov     x9,    %[c_fp32_ptr]                \n"                 \
@@ -388,6 +502,50 @@
           "z10", "z11", "z12", "z13", "z14", "z15", "z16", "z17", "z18", "z19", \
           "z20", "z21", "z22", "z23", "z24", "z25",                             \
           "cc", "memory");
+
+#define ASM_BLOCK_C_ACCUMULATE_FP16                                      \
+    asm volatile(                                                        \
+        "mov     x9,    %[c_fp16_ptr]                \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z10.h, z10.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z11.h, z11.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z14.h, z14.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z15.h, z15.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z18.h, z18.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z19.h, z19.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z22.h, z22.h,  z2.h                 \n"                 \
+                                                                         \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z23.h, z23.h,  z2.h                 \n"                 \
+        : /* empty OutputOperands */                                     \
+        : [c_fp16_ptr] "r"(c_fp16_ptr),                                  \
+          [next_line_offset] "r"(next_line_offset),                      \
+          [M] "r"(M)                                                     \
+        : "p1", "x9",                                                    \
+          "z2",                                                          \
+          "z10", "z11", "z14", "z15", "z18", "z19",                      \
+          "z22", "z23",                                                  \
+          "cc", "memory");
+
 
 #define ASM_BLOCK_C_RES_STORE                                            \
     asm volatile(                                                        \
@@ -459,6 +617,70 @@
         : "p1", "p2", "x2", "x5", "x9",                                  \
           "z10", "z11", "z12", "z13", "z14", "z15", "z16", "z17", "z18", "z19", \
           "z20", "z21", "z22", "z23", "z24", "z25",                             \
+          "cc", "memory");
+
+#define ASM_BLOCK_C_RES_STORE_FP16                                       \
+    asm volatile(                                                        \
+        "mov     x9,    %[c_fp16_ptr]                \n"                 \
+        "st1h    z10.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 1) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #1                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z11.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 2) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #2                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z14.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 3) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #3                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z15.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 4) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #4                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z18.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 5) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #5                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z19.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 6) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #6                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z22.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        /* if (m + 7) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #7                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_STORE "f               \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "st1h    z23.h, p1,   [x9, #0, MUL VL]       \n"                 \
+                                                                         \
+        " " LABEL_SKIP_STORE ":\n"                                       \
+        : /* empty OutputOperands */                                     \
+        : [c_fp16_ptr] "r"(c_fp16_ptr),                                  \
+          [next_line_offset] "r"(next_line_offset),                      \
+          [M] "r"(M)                                                     \
+        : "p1", "p2", "x2", "x5", "x9",                                  \
+          "z10", "z11", "z14", "z15", "z18", "z19",                      \
+          "z22", "z23",                                                  \
           "cc", "memory");
 
 #define ASM_BLOCK_C_RES_ACCUMULATE                                       \
@@ -550,6 +772,78 @@
           "z20", "z21", "z22", "z23", "z24", "z25",                             \
           "cc", "memory");
 
+#define ASM_BLOCK_C_RES_ACCUMULATE_FP16                                  \
+    asm volatile(                                                        \
+        "mov     x9,    %[c_fp16_ptr]                \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z10.h, z10.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 1) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #1                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z11.h, z11.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 2) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #2                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z14.h, z14.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 3) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #3                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z15.h, z15.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 4) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #4                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z18.h, z18.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 5) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #5                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z19.h, z19.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 6) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #6                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z22.h, z22.h,  z2.h                 \n"                 \
+                                                                         \
+        /* if (m + 7) > M, go to label (skip store) */                   \
+        "add     x5,    x2,   #7                     \n"                 \
+        "cmp     x5,    %[M]                         \n"                 \
+        "b.tcont " LABEL_SKIP_ACCUMULATE "f          \n"                 \
+        "add     x9,    x9,   %[next_line_offset]    \n"                 \
+        "ld1h    z2.h,  p1/z, [x9, #0, MUL VL]       \n"                 \
+        "fadd    z23.h, z23.h,  z2.h                 \n"                 \
+                                                                         \
+        " " LABEL_SKIP_ACCUMULATE ":\n"                                  \
+        : /* empty OutputOperands */                                     \
+        : [c_fp16_ptr] "r"(c_fp16_ptr),                                  \
+          [next_line_offset] "r"(next_line_offset),                      \
+          [M] "r"(M)                                                     \
+        : "p1", "p2", "x2", "x5", "x9",                                  \
+          "z2",                                                          \
+          "z10", "z11", "z14", "z15", "z18", "z19",                      \
+          "z22", "z23",                                                  \
+          "cc", "memory");
 /***********************/
 
 #define ASM_BLOCK_ACTIVE_RELU                 \

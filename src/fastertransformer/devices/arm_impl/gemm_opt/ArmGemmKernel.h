@@ -87,13 +87,30 @@ private:
     void
     thread_block_bf16_m8_res(GemmPartParam<hie::bfloat16, hie::bfloat16, float, float>& p, int m, int n, int k, int k_tile);
 
+    void thread_block_bf16_m8(GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float>& p, int m, int n, int k, int k_tile);
+    void
+    thread_block_bf16_m8_mres(GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float>& p, int m, int n, int k, int k_tile);
+    void
+    thread_block_bf16_m8_nres(GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float>& p, int m, int n, int k, int k_tile);
+    void
+    thread_block_bf16_m8_res(GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float>& p, int m, int n, int k, int k_tile);
+
     void pack_input_arm(int M, int N, int K, int lda, int K_pack, float* a_fp32, hie::bfloat16* a_bf16);
 
 
     void gemm_thread_block_bf16(
         GemmPartParam<hie::bfloat16, hie::bfloat16, float, float> p, int m, int n, int m_tile, int n_tile, int k_tile);
 
+    void gemm_thread_block_bf16(
+        GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float> p, int m, int n, int m_tile, int n_tile, int k_tile);
+
+
     void gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, float, float>& p);
+
+    void gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float>& p);
+
+    template<typename Tc>
+    void gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, Tc, float>& p);
 
 public:
     void gemm_pack_weight_FP32toBF16_arm(int N, int K, int K_pack, const float* b_fp32, hie::bfloat16* b_bf16);
@@ -180,5 +197,30 @@ void GemmKernel::gemm_kernel_arm(int            M,
     }
     return;
 }
+
+// template<typename Tc>
+// void GemmKernel::gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, Tc, float>& p) {
+//     int m_tile = 32;
+//     int n_tile = 64;
+//     int k_tile = 2560;
+//     if (p.K_pack == 5120)
+//         k_tile = 5120;
+
+//     int m_max = (p.M + m_tile - 1) / m_tile;
+//     int n_max = (p.N + n_tile - 1) / n_tile;
+//     if constexpr (std::is_same<Tc, float>::value) {
+//         parallel_for(m_max, n_max, [&](int m, int n) {
+//             gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile);
+//         });
+//     } else if constexpr (std::is_same<Tc, float16_t>::value) {
+//         parallel_for(m_max, n_max, [&](int m, int n) {
+//             gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile);
+//         });
+//     } else {
+//         std::cerr << "Unsupported data type for C" << std::endl;
+//         return;
+//     }
+//     return;
+// }
 
 }  // namespace fastertransformer

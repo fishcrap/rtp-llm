@@ -44,7 +44,7 @@ void GemmKernel::thread_block_bf16_m8(
 
     // clang-format off
 
-  asm volatile(
+    asm volatile(
         "ptrue   p0.b                               \n"
         "ptrue   p4.b                               \n"
         "ptrue   p5.b                               \n"
@@ -192,7 +192,7 @@ void GemmKernel::thread_block_bf16_m8(
 
     // clang-format off
 
-  asm volatile(
+    asm volatile(
         "ptrue   p0.b                               \n"
         "ptrue   p4.b                               \n"
         "ptrue   p5.b                               \n"
@@ -346,7 +346,7 @@ void GemmKernel::thread_block_bf16_m8_mres(
 
     // clang-format off
 
-  asm volatile(
+    asm volatile(
         "ptrue   p0.b                               \n"
         "ptrue   p4.b                               \n"
         "ptrue   p5.b                               \n"
@@ -499,7 +499,7 @@ void GemmKernel::thread_block_bf16_m8_mres(
 
     // clang-format off
 
-  asm volatile(
+    asm volatile(
         "ptrue   p0.b                               \n"
         "ptrue   p4.b                               \n"
         "ptrue   p5.b                               \n"
@@ -654,7 +654,7 @@ void GemmKernel::thread_block_bf16_m8_nres(
 
     // clang-format off
 
-  asm volatile(
+    asm volatile(
         "ptrue   p0.b                               \n"
         "ptrue   p4.b                               \n"
         "ptrue   p5.b                               \n"
@@ -807,7 +807,7 @@ void GemmKernel::thread_block_bf16_m8_nres(
 
     // clang-format off
 
-  asm volatile(
+    asm volatile(
         "ptrue   p0.b                               \n"
         "ptrue   p4.b                               \n"
         "ptrue   p5.b                               \n"

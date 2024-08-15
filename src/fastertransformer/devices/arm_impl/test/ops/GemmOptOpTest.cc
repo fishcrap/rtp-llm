@@ -129,7 +129,9 @@ void ArmGemmOptOpTest::BatchGemmFP16OP(size_t b, size_t m, size_t n, size_t k, b
     timer_.reset();
     auto       C_device = device_->gemm_opt(params);
     timer_recorder_.record(std::string("BatchGemmFP16OP") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer_.elapsed_nano());
-    std::cout << "BatchGemmFP16OP" << ", m=" << m << ", n=" << n << ", k=" << k << std::endl;
+    if (check_result) {
+        std::cout << "BatchGemmFP16OP" << ", m=" << m << ", n=" << n << ", k=" << k << std::endl;
+    }
 
     auto A      = bufferToTensor(*A_device);
     auto B      = bufferToTensor(*B_device);
@@ -143,6 +145,7 @@ void ArmGemmOptOpTest::BatchGemmFP16OP(size_t b, size_t m, size_t n, size_t k, b
     }
 
     auto C_host = torch::matmul(A_host, B_host).to(torch::kFloat);
+    // auto C_host = torch::matmul(A_host, B_host);
     
     auto C_host_slice = C_host.index({torch::indexing::Slice(torch::indexing::None), torch::indexing::Slice(0, 8), torch::indexing::Slice(0, 8)});
     auto C_slice = C.index({torch::indexing::Slice(torch::indexing::None), torch::indexing::Slice(0, 8), torch::indexing::Slice(0, 8)});
@@ -266,10 +269,10 @@ TEST_F(ArmGemmOptOpTest, BatchGemmFP16OpTest) {
     // BatchGemmFP16OP(1, 10, 2048, 5504);
     // BatchGemmFP16OP(1, 10, 6144, 2048);
 
-    // BatchGemmFP16OP(1, 7, 1, 4);
+    // BatchGemmFP16OP(1, 1, 8, 4);
     // randomly generate b, m, n, k, and use BatchGemmOP to test
     // b, m, n, k in range [1, 4096]
-    // int size = 10;
+    // int size = 100;
     // for (int i = 0; i < size; i++) {
     //     int b = 1;
     //     int m = rand() % 20 + 1;
@@ -279,14 +282,16 @@ TEST_F(ArmGemmOptOpTest, BatchGemmFP16OpTest) {
     //     BatchGemmFP16OP(b, m, n, k);
     // }
 
-    int size = 100;
-    for (int i = 0; i < size; i++) {
-        int b = 1;
-        int m = rand() % 4096 + 1;
-        int n = rand() % 4096 + 1;
-        int k = rand() % 4096 + 1;
-        BatchGemmFP16OP(b, m, n, k);
-    }
+    // int size = 100;
+    // for (int i = 0; i < size; i++) {
+    //     int b = 1;
+    //     int m = rand() % 4096 + 1;
+    //     int n = rand() % 4096 + 1;
+    //     int k = rand() % 4096 + 1;
+    //     BatchGemmFP16OP(b, m, n, k);
+    // }
+
+    
     // for (auto m : m_list) {
     //     BatchGemmFP16OP(1, m, 2048, 2048);
     //     BatchGemmFP16OP(1, m, 5504, 2048);
@@ -294,15 +299,16 @@ TEST_F(ArmGemmOptOpTest, BatchGemmFP16OpTest) {
     //     BatchGemmFP16OP(1, m, 2048, 5504);
     //     BatchGemmFP16OP(1, m, 6144, 2048);
     // }
-    // for (int i = 0; i < 100; i++) {
-    //     for (auto m : m_list) {
-    //         BatchGemmFP16OP(1, m, 2048, 2048, false);
-    //         BatchGemmFP16OP(1, m, 5504, 2048, false);
-    //         BatchGemmFP16OP(1, m, 5504, 2048, false);
-    //         BatchGemmFP16OP(1, m, 2048, 5504, false);
-    //         BatchGemmFP16OP(1, m, 6144, 2048, false);
-    //     }
-    // }
+
+    for (int i = 0; i < 100; i++) {
+        for (auto m : m_list) {
+            BatchGemmFP16OP(1, m, 2048, 2048, false);
+            BatchGemmFP16OP(1, m, 5504, 2048, false);
+            BatchGemmFP16OP(1, m, 5504, 2048, false);
+            BatchGemmFP16OP(1, m, 2048, 5504, false);
+            BatchGemmFP16OP(1, m, 6144, 2048, false);
+        }
+    }
     timer_recorder_.print();
 #ifdef GEMM_DEBUG
     ArmCpuDevice::print_time();

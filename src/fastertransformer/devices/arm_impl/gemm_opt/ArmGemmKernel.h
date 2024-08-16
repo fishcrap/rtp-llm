@@ -109,11 +109,6 @@ private:
     void gemm_thread_block_bf16(
         GemmPartParam<hie::bfloat16, hie::bfloat16, Tc, float> p, int m, int n, int m_tile, int n_tile, int k_tile);
 
-
-    void gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, float, float>& p);
-
-    void gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, float16_t, float>& p);
-
     template<typename Tc>
     void gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16, Tc, float>& p);
 
@@ -122,29 +117,6 @@ public:
 
     void gemm_pack_weight_FP16toBF16_arm(int N, int K, int K_pack, const float16_t* b_fp16, hie::bfloat16* b_bf16);
 
-    void gemm_kernel_arm(int            M,
-                         int            N,
-                         int            K,
-                         int            k_pack,
-                         int            lda,
-                         float*         a_fp32,
-                         hie::bfloat16* b_bf16,
-                         float*         c_fp32,
-                         float*         bias_fp32,
-                         int            actType,
-                         void*          workspace);
-
-    void gemm_kernel_arm(int            M,
-                         int            N,
-                         int            K,
-                         int            k_pack,
-                         int            lda,
-                         float16_t*     a_fp16,
-                         hie::bfloat16* b_bf16,
-                         float*         c_fp32,
-                         float*         bias_fp32,
-                         int            actType,
-                         void*          workspace);
     template <typename Ta, typename Tc>
     void gemm_kernel_arm(int            M,
                          int            N,
@@ -193,10 +165,8 @@ void GemmKernel::gemm_kernel_arm(int            M,
         M, N, k_pack_compute, a_bf16, b_bf16, c, bias_fp32, with_bias, actType);
     
     if constexpr (std::is_same<Tc, float>::value) {
-        // gemm_thread_strategy(p);
         gemm_thread_strategy<float>(p);
     } else if constexpr (std::is_same<Tc, float16_t>::value) {
-        // gemm_thread_strategy(p);
         gemm_thread_strategy<float16_t>(p);
     } else {
         std::cerr << "Unsupported data type for C" << std::endl;
@@ -216,20 +186,8 @@ void GemmKernel::gemm_thread_strategy(GemmPartParam<hie::bfloat16, hie::bfloat16
     int m_max = (p.M + m_tile - 1) / m_tile;
     int n_max = (p.N + n_tile - 1) / n_tile;
     parallel_for(m_max, n_max, [&](int m, int n) {
-        gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile);
+        gemm_thread_block_bf16<Tc>(p, m, n, m_tile, n_tile, k_tile);
     });
-    // if constexpr (std::is_same<Tc, float>::value) {
-    //     parallel_for(m_max, n_max, [&](int m, int n) {
-    //         gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile);
-    //     });
-    // } else if constexpr (std::is_same<Tc, float16_t>::value) {
-    //     parallel_for(m_max, n_max, [&](int m, int n) {
-    //         gemm_thread_block_bf16(p, m, n, m_tile, n_tile, k_tile);
-    //     });
-    // } else {
-    //     std::cerr << "Unsupported data type for C" << std::endl;
-    //     return;
-    // }
     return;
 }
 

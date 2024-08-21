@@ -43,8 +43,10 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     copts = copts() + [
-        "-march=armv8.2a+dotprod+fp16+bf16+i8mm+sve+sve2",
-        "-fopenmp=libomp",
+        # "-march=armv8.2a+dotprod+fp16+bf16+i8mm+sve+sve2",
+        "-march=armv8.5-a+sve2+bf16+fp16",
+        # "-fopenmp=libomp",
+        "-fopenmp",
         "-fPIC",
     ],
     linkopts = ["-fopenmp"],

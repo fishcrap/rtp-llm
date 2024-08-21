@@ -1,7 +1,7 @@
 build --python_top=//:python310 --incompatible_use_python_toolchains=false # force use /opt/conda310/bin/python3
 
 build --spawn_strategy=local # avoid nvcc conflicts
-build --action_env PYTHON_BIN_PATH="/home/sxj/.conda/envs/rtp-llm/bin/python"
+build --action_env PYTHON_BIN_PATH="/home/sxj/miniconda3/envs/rtp-llm-f/bin/python"
 build --cxxopt="-std=c++17" --copt="-DGTEST_USE_OWN_TR1_TUPLE=0" --copt="-DEIGEN_MAX_CPP_VER=11" --copt="-D_GLIBCXX_USE_CXX11_ABI=0"
 build -c opt
 build --copt -O2
@@ -17,7 +17,7 @@ build --experimental_cc_implementation_deps
 build --deleted_packages @havenask//aios/kmonitor
 build --copt -DOPENSSL_IS_BORINGSSL
 build --linkopt="-lm"
-build --action_env LIBRARY_PATH=/home/sxj/.conda/envs/rtp-llm/lib
+build --action_env LIBRARY_PATH="/home/sxj/miniconda3/envs/rtp-llm-f/lib"
 build --define=grpc_no_ares=true
 
 build:cuda --copt="-DENABLE_BF16=1"
@@ -42,8 +42,8 @@ build:cuda --host_action_env TF_NEED_CUDA="1"
 # 6.0 = P100, 7.0 = V100, 7.5 = T4, 8.6 = A10, 8.0 = A100
 build:cuda --action_env TF_CUDA_COMPUTE_CAPABILITIES="7.0,7.5,8.0,8.6"
 build:cuda --host_action_env TF_CUDA_COMPUTE_CAPABILITIES="7.0,7.5,8.0,8.6"
-build:cuda --action_env LD_LIBRARY_PATH="/lib64:/home/sxj/.conda/envs/rtp-llm/lib/:/usr/local/cuda/lib64:$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:./aios/fslib:/opt/taobao/java/jre/lib/amd64/server/"
-build:cuda --host_action_env LD_LIBRARY_PATH="/lib64:/home/sxj/.conda/envs/rtp-llm/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:./aios/fslib:/opt/taobao/java/jre/lib/amd64/server/"
+build:cuda --action_env LD_LIBRARY_PATH="/lib64:/home/sxj/miniconda3/envs/rtp-llm-f/lib/:/usr/local/cuda/lib64:$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:./aios/fslib:/opt/taobao/java/jre/lib/amd64/server/"
+build:cuda --host_action_env LD_LIBRARY_PATH="/lib64:/home/sxj/miniconda3/envs/rtp-llm-f/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH:$HADOOP_HOME/lib/native/:./aios/fslib:/opt/taobao/java/jre/lib/amd64/server/"
 build:cuda --action_env NCCL_INSTALL_PATH="/usr/local/cuda/"
 build:cuda --action_env NCCL_HDR_PATH="/usr/local/cuda/include"
 build:cuda --action_env TF_NCCL_VERSION="2"
@@ -131,13 +131,13 @@ build:asan --copt -fPIC # for "fix relocation truncated to fit: R_X86_64_32 agai
 build:asan --copt -fdebug-types-section # for "fix relocation truncated to fit: R_X86_64_32 against `.debug_info'" collect2 error
 build:asan --linkopt -fsanitize=address
 
-test --test_env LD_LIBRARY_PATH="/home/sxj/.conda/envs/rtp-llm/lib:/usr/local/nvidia/lib64:/usr/lib64:/usr/local/cuda/lib64"
+test --test_env LD_LIBRARY_PATH="/home/sxj/.cache/bazel/_bazel_sxj/d211fc38a2679043fce022480e90d7db/external/torch_2.3_py310_cpu_aarch64/torch.libs:/home/sxj/miniconda3/envs/rtp-llm-f/lib:/usr/local/nvidia/lib64:/usr/lib64:/usr/local/cuda/lib64"
 test --test_env OMP_NUM_THREADS=8
 test --test_env FT_SERVER_TEST="1"
 test --test_env PY_LOG_LEVEL="INFO"
 test --test_env FT_DISABLE_CUSTOM_AR="1"
 
 # compat for low driver < 535
-test:compat --test_env LD_LIBRARY_PATH="/home/sxj/.conda/envs/rtp-llm/lib:/usr/local/cuda/compat/:/usr/local/nvidia/lib64:/usr/lib64:/usr/local/cuda/lib64"
+test:compat --test_env LD_LIBRARY_PATH="/home/sxj/miniconda3/envs/rtp-llm-f/lib:/usr/local/cuda/compat/:/usr/local/nvidia/lib64:/usr/lib64:/usr/local/cuda/lib64"
 
 try-import %workspace%/internal_source/.internal_bazelrc

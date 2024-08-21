@@ -163,9 +163,9 @@ cc_library(
 
 py_runtime(
     name = "python310",
-    interpreter_path = "/home/sxj/.conda/envs/rtp-llm/bin/python",
+    interpreter_path = "/home/sxj/miniconda3/envs/rtp-llm-f/bin/python",
     python_version = "PY3",
-    stub_shebang = "#!/home/sxj/.conda/envs/rtp-llm/bin/python"
+    stub_shebang = "#!/home/sxj/miniconda3/envs/rtp-llm-f/bin/python"
 )
 
 cc_binary(

@@ -10,6 +10,20 @@
 
 namespace fastertransformer {
 
+
+/// @brief   basic gemm ops
+/// @details D = alpha * op(A) * op(B) + beta * C
+///          A [b, ..., m, k]
+///          B [b, ..., k, n]
+///          C [b, ..., m, n]
+BufferPtr ArmCpuDevice::gemm(const GemmParams& params) {
+    if (params.transA == TransposeOperation::NONE && params.transB == TransposeOperation::NONE) {
+        return gemm_opt(params);
+    }
+    return gemm_acl(params);
+}
+
+
 /// @brief   basic gemm ops
 /// @details D = alpha * op(A) * op(B) + beta * C
 ///          A [b, ..., m, k]
@@ -19,7 +33,6 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
 
     FT_CHECK_WITH_INFO(params.transA == TransposeOperation::NONE && params.transB == TransposeOperation::NONE,
                        "GEMM_OPT DO NOT support transpose operation");
-    FT_LOG_INFO("run arm gemm_opt");
 #ifdef GEMM_DEBUG
     Timer timer;
 #endif

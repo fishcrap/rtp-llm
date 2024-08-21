@@ -136,7 +136,7 @@ class ModelWeightsLoader:
         for weight in self._model_weights_info.weights:
             tensor = self._load_and_convert_tensor(weight, datatype=self._data_type)
             tensor = self._split_and_sanitize_tensor(tensor, weight)
-            tensor = tensor.to('cuda')
+            tensor = tensor.to('cpu')
             weights.append_pytorch_weight(weight.name, tensor)
 
         for name, tensor in self._load_medusa_weights(self._model_weights_info.medusa_weights):

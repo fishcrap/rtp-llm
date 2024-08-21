@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Optional, Union, Dict, Any, List, Set
 from maga_transformer import _ft_pickler
 from pathlib import Path
+from easydict import EasyDict as edict
 
 class AtomicCounter:
     def __init__(self, initial: int=0):
@@ -134,6 +135,7 @@ def get_dtype_size(dtype: torch.dtype) -> int:
     return {torch.int8: 1, torch.half: 2, torch.bfloat16: 2, torch.float: 4}[dtype]
 
 def get_mem_info():
+    return edict({"used":-1,  "free":-1})
     pynvml.nvmlInit()
     handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda._parse_visible_devices()[0])
     meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)

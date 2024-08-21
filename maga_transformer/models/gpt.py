@@ -49,7 +49,7 @@ class GPT(BaseModel):
         self.init_prefix_encoder()
         self.init_medusa()
         self.init_pipeline_param()
-        self.load()
+        self.load('cpu')
     
     def init_misc(self):
         self.task_type = self.config.task_type
@@ -103,7 +103,7 @@ class GPT(BaseModel):
                 if self.config.norm_type == 'layernorm' or self.config.norm_type == 'alphanorm':
                     self.post_decoder_layernorm = torch.nn.LayerNorm(hidden_dim, eps=self.config.layernorm_eps, dtype=self.compute_dtype).to('cuda:0')
                 elif self.config.norm_type == 'rmsnorm':
-                    self.post_decoder_layernorm = RMSNorm(hidden_dim, eps=self.config.layernorm_eps, use_bias=True).to('cuda:0')
+                    self.post_decoder_layernorm = RMSNorm(hidden_dim, eps=self.config.layernorm_eps, use_bias=True)
             else:
                 self.post_decoder_layernorm = None
             if self.task_type == TaskType.LANGUAGE_MODEL:
@@ -175,13 +175,25 @@ class GPT(BaseModel):
             self.config, g_parallel_info.tp_size)
         weights_info = self.get_weight_cls()(self.config, g_parallel_info.tp_size, g_parallel_info.tp_rank)
         model_weights_loader = get_model_weights_loader(weights_info, self.database, compute_dtype=self.compute_dtype)
-        self.weight = model_weights_loader.load_weights_from_scratch(num_process=load_parallel_num)
+        self.weight = model_weights_loader.load_weights_from_scratch(device='cpu', num_process=load_parallel_num)
         self._load_custom_module_weights(model_weights_loader)
         if self.static_lora:
             lora_name = list(self.config.lora_infos.keys())[0]
             model_weights_loader.show_warns(lora_name=lora_name)
         else:
             model_weights_loader.show_warns()
+        
+        # print('dump weights!')
+        # from maga_transformer.utils.export_utils import export_tensors_to_jit_module
+        # dump_dir = "maga_transformer/test/model_test/fake_test/testdata/qwen_0.5b"
+        # export_tensors_to_jit_module(self.weight._pytorch_weights, os.path.join(dump_dir, "pytorch_tensors.pt"))
+        # print(len(self.weight.weights))
+        # print(self.weight._pytorch_weights.keys())
+        # for i in range(len(self.weight.weights)):
+        #     if i == 0:
+        #         print(self.weight.weights[i].keys())
+        #     export_tensors_to_jit_module(self.weight.weights[i], os.path.join(dump_dir, f"layer_{i}.pt"))
+            
 
         self.weight.lora_resource = LoraResource({}, self.database, weights_info, LoRAMap())
         self.weight.lora_resource.model_weights_loader = model_weights_loader
@@ -226,7 +238,7 @@ class GPT(BaseModel):
     def _safe_load_from_module(self, param: torch.nn.Parameter, fname: str):
         # np_w is 1-D array since a bin file doesn't have shape info.
         print(f"load {fname} to {param.data.shape}")
-        param.data = self.weight.steal_pytorch_weight(fname).reshape(param.data.shape).to('cuda:0')
+        param.data = self.weight.steal_pytorch_weight(fname).reshape(param.data.shape).to('cpu')
 
     def _safe_load_prefix_encoder_weight_from_module(self, param: torch.nn.Parameter, fname: str, ctype: torch.dtype):
         # np_w is 1-D array since a bin file doesn't have shape info.

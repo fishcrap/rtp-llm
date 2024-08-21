@@ -42,8 +42,8 @@ def transpose_pad(ts: List[torch.Tensor], inter_padding_size: int, dim: int):
         pad_shape = [ts[0].shape[0], inter_padding_size - ts[0].shape[1]]
     else:
         raise Exception('unknown padding dim: ' + str(dim))
-    z = torch.zeros(pad_shape, device='cuda:0').half()
-    return torch.cat((ts[0].cuda(), z), dim).T.to('cuda:0').contiguous()
+    z = torch.zeros(pad_shape, device='cpu').half()
+    return torch.cat((ts[0], z), dim).T.to('cpu').contiguous()
 
 def b_half_merge(ts: List[torch.Tensor]):
     n_ts_1 = []
@@ -1131,7 +1131,7 @@ class LoraResource():
         self.rlock_map: Dict[str, RWLock] = {}
         self.to_add_lora_id = list()
         self.to_remove_lora_id = list()
-        self.stream = torch.cuda.Stream()
+        # self.stream = torch.cuda.Stream()
 
     @property
     def is_merge_lora(self):

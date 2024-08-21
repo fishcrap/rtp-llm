@@ -5,6 +5,7 @@
 #include "src/fastertransformer/core/BufferHelper.h"
 #include "src/fastertransformer/devices/utils/DebugUtils.h"
 #include "src/fastertransformer/models/W.h"
+#include "src/fastertransformer/devices/arm_impl/ArmDevice.h"
 #include <memory>
 
 using namespace std;
@@ -360,6 +361,9 @@ GptModelOutputs GptModel::forward(const GptModelInputs& inputs) {
         }
         // logits is too big, tmp not print default
         // printBufferData(*logits, "logits");
+#ifdef GEMM_DEBUG
+        ArmCpuDevice::print_time();
+#endif
         return {std::move(logits), std::move(last_hidden), std::move(hidden)};
     } else {
         return {nullptr, nullptr, std::move(hidden)};

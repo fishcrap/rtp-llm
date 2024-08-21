@@ -17,6 +17,9 @@ namespace fastertransformer {
 ///          C [b, ..., m, n]
 BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
 
+    FT_CHECK_WITH_INFO(params.transA == TransposeOperation::NONE && params.transB == TransposeOperation::NONE,
+                       "GEMM_OPT DO NOT support transpose operation");
+    FT_LOG_INFO("run arm gemm_opt");
 #ifdef GEMM_DEBUG
     Timer timer;
 #endif
@@ -95,11 +98,11 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
     BufferPtr weight_workspace;
     const Buffer *weight_workspace_ptr = nullptr;
 
+    size_t weight_k_pack = std::ceil(k / 8.0) * 8;
+    size_t width = weight_k_pack * 2;
+    size_t height = n / 2 + n % 2;
     if (params.B.type() == DataType::TYPE_FP32 || params.B.type() == DataType::TYPE_FP16) {
         // allocate a temp workspace to pack weight fp32->bf16
-        size_t weight_k_pack = std::ceil(k / 8.0) * 8;
-        size_t width = weight_k_pack * 2;
-        size_t height = n / 2 + n % 2;
         std::vector<size_t> weight_workspace_shape = std::vector<size_t>(Bshape.begin(), Bshape.end() - 2);
         weight_workspace_shape.insert(weight_workspace_shape.end(), {height, width});
         weight_workspace = allocateBuffer({DataType::TYPE_BF16, weight_workspace_shape, AllocationType::DEVICE}, {"gemm_weight_workspace"});
@@ -133,7 +136,7 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
         timer.reset();
 #endif
 
-        hie::bfloat16* B_bf16_ptr = reinterpret_cast<hie::bfloat16*>(weight_workspace_ptr->dataWithOffset(batch * k * n));
+        hie::bfloat16* B_bf16_ptr = reinterpret_cast<hie::bfloat16*>(weight_workspace_ptr->dataWithOffset(batch * height * width));
         float* C_fp32_ptr = reinterpret_cast<float*>(output->dataWithOffset(batch * m * n));
         float16_t* C_fp16_ptr = reinterpret_cast<float16_t*>(output->dataWithOffset(batch * m * n));
         if (params.A.type() == DataType::TYPE_FP32) {
@@ -166,6 +169,12 @@ BufferPtr ArmCpuDevice::gemm_opt(const GemmParams& params) {
                 gemm_kernel_.gemm_kernel_arm<float16_t, float>(m, n, k, k_pack, lda, A_fp16_ptr, B_bf16_ptr, C_fp32_ptr, nullptr, 0, workspace->data());
             } else if (data_type == DataType::TYPE_FP16) {
                 gemm_kernel_.gemm_kernel_arm<float16_t, float16_t>(m, n, k, k_pack, lda, A_fp16_ptr, B_bf16_ptr, C_fp16_ptr, nullptr, 0, workspace->data());
+                // for (size_t i = 0; i < m; ++i) {
+                //     for (size_t j = 0; j < n; ++j) {
+                //         std::cout << C_fp16_ptr[i * n + j] << " ";
+                //     }
+                //     std::cout << std::endl;
+                // }
             } else {
                 std::cerr << "Unsupported data type for compute" << std::endl;
                 return nullptr;

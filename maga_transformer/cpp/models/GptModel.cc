@@ -6,6 +6,7 @@
 #include "src/fastertransformer/devices/utils/DebugUtils.h"
 #include "src/fastertransformer/models/W.h"
 #include "src/fastertransformer/utils/assert_utils.h"
+#include "src/fastertransformer/devices/arm_impl/ArmDevice.h"
 #include <memory>
 
 using namespace std;
@@ -466,6 +467,9 @@ GptModelOutputs GptModel::forward(const GptModelInputs& inputs) {
         }
         // logits is too big, tmp not print default
         // printBufferData(*logits, "logits");
+#ifdef GEMM_DEBUG
+        ArmCpuDevice::print_time();
+#endif
         if (inputs.need_all_logits) {
             auto last_logits = device_->select({*logits, *device_->clone({*inputs.lm_output_indexes})});
             return {std::move(last_logits), std::move(last_hidden), std::move(hidden), std::move(logits)};

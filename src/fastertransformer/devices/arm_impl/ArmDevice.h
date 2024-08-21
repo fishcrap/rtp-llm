@@ -23,6 +23,7 @@ public:
     void copy(const CopyParams& params);
     LayernormOutput layernorm(const LayernormParams& params);
     BufferPtr gemm(const GemmParams& params);
+    BufferPtr gemm_acl(const GemmParams& params);
     BufferPtr gemm_opt(const GemmParams& params);
     GroupedGemmOutput groupedGemm(const GroupedGemmParams& params);
     BufferPtr embeddingLookup(const EmbeddingLookupParams& params);

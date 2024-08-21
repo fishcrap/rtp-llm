@@ -21,7 +21,6 @@ public:
     // basic compuation ops
     virtual LayernormOutput layernorm(const LayernormParams& params);
     virtual BufferPtr gemm(const GemmParams& params);
-    virtual BufferPtr gemm_opt(const GemmParams& params);
     virtual GroupedGemmOutput groupedGemm(const GroupedGemmParams& params);
     virtual MultiplyOutput multiply(const MultiplyParams& params);
     virtual BufferPtr embeddingLookup(const EmbeddingLookupParams& params);

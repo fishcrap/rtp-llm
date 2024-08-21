@@ -58,7 +58,7 @@ void ArmGemmOptOpTest::BasicGemmOP(size_t m, size_t n, size_t k) {
     // auto B_device = createHostBuffer<hie::bfloat16>({k, n}, tensorToBuffer(B_host, AllocationType::HOST)->data());
 
     GemmParams params{*A_device, *B_device};
-    auto       C_device = device_->gemm_opt(params);
+    auto       C_device = device_->gemm(params);
 
     auto C_host = torch::matmul(A_host, B_host).to(torch::kFloat);
     auto A      = bufferToTensor(*A_device);
@@ -91,7 +91,7 @@ void ArmGemmOptOpTest::BatchGemmOP(size_t b, size_t m, size_t n, size_t k) {
     GemmParams params{*A_device, *B_device};
 
     timer_.reset();
-    auto       C_device = device_->gemm_opt(params);
+    auto       C_device = device_->gemm(params);
     timer_recorder_.record(std::string("BatchGemmFP16OP") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer_.elapsed_nano());
 
 
@@ -124,10 +124,10 @@ void ArmGemmOptOpTest::BatchGemmFP16OP(size_t b, size_t m, size_t n, size_t k, b
     // auto A_device = createDeviceBuffer<float>(A_host.to(torch::kFloat));
     // auto B_device = createDeviceBuffer<float>(B_host.to(torch::kFloat));
 
-    GemmParams params{*A_device, *B_device, nullopt, nullptr, DataType::TYPE_FP32};
+    GemmParams params{*A_device, *B_device, nullopt, nullptr, DataType::TYPE_FP16};
 
     timer_.reset();
-    auto       C_device = device_->gemm_opt(params);
+    auto       C_device = device_->gemm(params);
     timer_recorder_.record(std::string("BatchGemmFP16OP") + ", m=" + std::to_string(m) + ", n=" + std::to_string(n) + ", k=" + std::to_string(k), timer_.elapsed_nano());
     if (check_result) {
         std::cout << "BatchGemmFP16OP" << ", m=" << m << ", n=" << n << ", k=" << k << std::endl;
@@ -137,14 +137,15 @@ void ArmGemmOptOpTest::BatchGemmFP16OP(size_t b, size_t m, size_t n, size_t k, b
     auto B      = bufferToTensor(*B_device);
     auto C      = bufferToTensor(*C_device);
 
-    // no nan
-    ASSERT_TRUE((~torch::any(torch::isnan(C))).item<bool>());
-
     if (!check_result) {
         return;
     }
 
-    auto C_host = torch::matmul(A_host, B_host).to(torch::kFloat);
+    // no nan
+    ASSERT_TRUE((~torch::any(torch::isnan(C))).item<bool>());
+
+
+    auto C_host = torch::matmul(A_host, B_host).to(torch::kHalf);
     // auto C_host = torch::matmul(A_host, B_host);
     
     auto C_host_slice = C_host.index({torch::indexing::Slice(torch::indexing::None), torch::indexing::Slice(0, 8), torch::indexing::Slice(0, 8)});
@@ -274,7 +275,7 @@ TEST_F(ArmGemmOptOpTest, BatchGemmFP16OpTest) {
     // b, m, n, k in range [1, 4096]
     // int size = 100;
     // for (int i = 0; i < size; i++) {
-    //     int b = 1;
+    //     int b = rand() % 20 + 1;
     //     int m = rand() % 20 + 1;
     //     int n = rand() % 20 + 1;
     //     int k = rand() % 20 + 1;

@@ -30,7 +30,7 @@ class ChatGlmV4Vision(ChatGlmV4, MultiModalMixin):
     def is_multimodal(cls) -> bool:
         return True
 
-    def load(self, device: Union[str, torch.device] = 'cuda:0'):
+    def load(self, device: str):
         if os.environ.get("VIT_TRT", "0") == "1":
             weights_info = self.get_weight_cls()(self.config, g_parallel_info.tp_size, g_parallel_info.tp_rank)
             self.init_mm_trt(
@@ -50,7 +50,11 @@ class ChatGlmV4Vision(ChatGlmV4, MultiModalMixin):
         config.vit_related_params.config['use_vision_hidden_size'] = False
         config.vit_related_params.config["boi_token_id"] = config_dict.get("boi_token_id", 0)
         config.vit_related_params.config["eoi_token_id"] = config_dict.get("eoi_token_id", 0)
-        config.tp_split_emb_and_lm_head = False  # chatglmv4 embedding can't tp
+        config.tp_split_emb_and_lm_head = True if int(os.environ.get("USE_RPC_MODEL", "0")) == 1 else False
+        config.mm_sep_tokens = [config_dict.get("boi_token_id", 0), config_dict.get("eoi_token_id", 0)]
+        config.is_multimodal = True
+        config.cal_mm_tokens_in_rotary_emb = False
+        config.include_sep_tokens = True
         return config
 
     @staticmethod

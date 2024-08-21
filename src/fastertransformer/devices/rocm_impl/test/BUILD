@@ -1,4 +1,5 @@
-load("//:def.bzl", "copts", "torch_deps", "rocm_copts")
+load("//:def.bzl", "copts", "rocm_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 load("//src/fastertransformer/devices:device_defs.bzl",
     "device_impl_target", "device_test_envs", "device_linkopts")
 
@@ -17,6 +18,7 @@ test_linkopts = [
 test_deps = [
     "@local_config_rocm//rocm:rocm_headers",
     "@local_config_rocm//rocm:rocblas",
+    "//src/fastertransformer/cuda:nccl",
     "//src/fastertransformer/devices/rocm_impl:rocm_impl",
     "//src/fastertransformer/devices/testing:device_test_utils",
     "//src/fastertransformer/devices/base_tests:base_tests",
@@ -57,7 +59,7 @@ cc_test(
     copts = test_copts + copts(),
     linkopts = test_linkopts,
     deps = test_deps,
-    tags = ["rocm"],
+    tags = ["rocm", "manual"],
 )
 
 cc_test(
@@ -83,7 +85,7 @@ cc_test(
     copts = test_copts + copts(),
     linkopts = test_linkopts,
     deps = test_deps,
-    tags = ["rocm"],
+    tags = ["rocm", "manual"],
 )
 
 cc_test(
@@ -150,4 +152,17 @@ cc_test(
     linkopts=test_linkopts,
     deps=test_deps,
     tags = ["rocm"],
+)
+
+cc_test(
+    name = "rccl_test",
+    srcs = [
+        "RcclTest.cc",
+    ],
+    data = [],
+    env = device_test_envs(),
+    copts = test_copts,
+    linkopts = test_linkopts,
+    deps = test_deps,
+    tags = ["rocm", "manual"],
 )

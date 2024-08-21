@@ -23,7 +23,6 @@ EmbeddingExecutor::EmbeddingExecutor(const EngineInitParams& params, ft::DeviceB
     params_(params.gpt_init_parameter)
 {
     model_.reset(new GptModel({device_, params.gpt_weights, Executor::genModelDescription(params_)}));
-    need_attention_mask_ = device_->getDeviceProperties().attention_need_mask;
     init_position_ids(params_.max_seq_len_);
 }
 
@@ -53,12 +52,8 @@ absl::StatusOr<GptModelInputs> EmbeddingExecutor::gatherModelInput(const std::li
     model_input.prefix_lengths =
         device_->allocateBuffer({ft::DataType::TYPE_INT32, {(size_t)batch_size}, ft::AllocationType::HOST}, {});
     memset(model_input.prefix_lengths->data(), 0, model_input.prefix_lengths->sizeBytes());
-    model_input.max_prefix_length =
-        device_->allocateBuffer({ft::DataType::TYPE_INT32, {1}, ft::AllocationType::HOST}, {});
-    *model_input.max_prefix_length->data<int32_t>() = 0;
     int*      merged_tokens    = model_input.combo_tokens->data<int>();
     int*      input_lengths    = model_input.input_lengths->data<int>();
-    int*      prefix_lengths   = model_input.prefix_lengths->data<int>();
     int*      merged_positon_ids = model_input.combo_position_ids->data<int>();
     int*      merged_token_type_ids = model_input.combo_tokens_type_ids->data<int>();
     int token_idx = 0;
@@ -77,7 +72,7 @@ absl::StatusOr<GptModelInputs> EmbeddingExecutor::gatherModelInput(const std::li
         int length_idx = 0;
         for (int i = 0; i < batchSize; i++) {
             int seqLen = stream->embeddingInput()->input_lengths->data<int32_t>()[i];
-            FT_CHECK_WITH_INFO(seqLen + position_bias <= max_position_ids_buf_->shape()[0], "position index exceed max_position_length");
+            FT_CHECK_WITH_INFO(seqLen + position_bias <= int(max_position_ids_buf_->shape()[0]), "position index exceed max_position_length");
             memcpy(merged_positon_ids + token_idx + length_idx, max_position_ids_buf_->data<int32_t>() + position_bias, seqLen * sizeof(int32_t));
             length_idx += seqLen;
         }
@@ -88,10 +83,6 @@ absl::StatusOr<GptModelInputs> EmbeddingExecutor::gatherModelInput(const std::li
         token_idx += length;
     }
     size_t max_seq_len = *std::max_element(input_lengths, input_lengths + batch_size);
-    if (need_attention_mask_) {
-        // 只有context请求，没有decode请求，所以直接使用input和prefix length，不需要像normal一样view
-        model_input.attention_mask = NormalBatchStreamProcessor::createAttentionMask({*model_input.input_lengths, *model_input.prefix_lengths, ft::getDataType(params_.data_type_), params_.is_causal_, device_});
-    }
     reportMetrics(batch_size, token_num, max_seq_len);
     return model_input;
 }
@@ -106,7 +97,6 @@ ModelRequest EmbeddingExecutor::generateOldModelRequest(GptModelInputs& model_in
     model_request.input_lengths        = model_input.input_lengths;
     model_request.sequence_lengths     = model_input.sequence_lengths;
     model_request.prefix_lengths       = model_input.prefix_lengths;
-    model_request.max_prefix_length    = model_input.max_prefix_length;
     model_request.attention_mask       = model_input.attention_mask;
     return model_request;
 }

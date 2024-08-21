@@ -8,7 +8,7 @@
 
 namespace rtp_llm {
 
-class EmbeddingExecutor{
+class EmbeddingExecutor {
 public:
     explicit EmbeddingExecutor(const EngineInitParams& params, ft::DeviceBase* device, py::object handler);
 
@@ -21,7 +21,6 @@ private:
     ft::BufferPtr                         max_position_ids_buf_;
     kmonitor::MetricsReporterPtr          metrics_reporter_ = nullptr;
     const fastertransformer::GptInitParameter params_;
-    bool                                  need_attention_mask_ = false;
 
     ModelRequest                     generateOldModelRequest(GptModelInputs& model_input);
     absl::StatusOr<GptModelInputs>   gatherModelInput(const std::list<EmbeddingStreamPtr>& streams) const;
@@ -33,4 +32,5 @@ private:
     void                             init_position_ids(int max_seq_len);
     void reportMetrics(size_t context_batch_size, size_t combo_token_num, size_t max_seq_len) const;
 };
+
 }  // namespace rtp_llm

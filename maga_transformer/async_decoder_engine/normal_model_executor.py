@@ -47,6 +47,7 @@ class NormalModelExecutor(ExecutorBase):
     def __init__(self, model_ops: ModelOps, cache_manager: CacheManager):
         self.model_ops = model_ops
         self.cache_manager_ = cache_manager
+        self.device = g_parallel_info.device
         dump_engine_to_table(self.create_config_json())
 
     @property
@@ -79,7 +80,7 @@ class NormalModelExecutor(ExecutorBase):
         for i in range(0, batch_query.context_batch_size):
             offset = offset + batch_query.context_query_context_lengths_list[i]
             index_list.append(offset)
-        return hidden_states.index_select(0, torch.tensor(index_list, device="cuda:0"))
+        return hidden_states.index_select(0, torch.tensor(index_list, device=self.device))
 
     def _select_context_hidden_states(self, batch_query: BatchQuery, hidden_states: torch.Tensor, idx):
         offset = batch_query.generate_batch_size * batch_query.num_beams
@@ -191,13 +192,13 @@ class NormalModelExecutor(ExecutorBase):
             flushed_print("combo_tokens = ", combo_tokens)
 
         if debug_print():
-            print(f"batch_query context streams num = {len(batch_query.context_streams)}")
-            print(f"batch_query decode streams num = {len(batch_query.decode_streams)}")
+            flushed_print(f"batch_query context streams num = {len(batch_query.context_streams)}")
+            flushed_print(f"batch_query decode streams num = {len(batch_query.decode_streams)}")
 
             for stream in batch_query.context_streams:
-                print(f"batch_query context stream: stream = {stream._stream_id} input_len = {stream.input_length}")
+                flushed_print(f"batch_query context stream: stream = {stream._stream_id} input_len = {stream.input_length}")
             for stream in batch_query.decode_streams:
-                print(f"batch_query decode stream: stream = {stream._stream_id} input_len = {stream.input_length}")
+                flushed_print(f"batch_query decode stream: stream = {stream._stream_id} input_len = {stream.input_length}")
 
         assert model.word_embedding is not None
         embedding_res: EmbeddingOutput = model.async_input_word_embedding(combo_tokens, images, combo_token_types)
@@ -333,7 +334,7 @@ class NormalModelExecutor(ExecutorBase):
             shift_labels = stream.complete_token_ids[0, 1:stream.input_length].type(torch.int64)
             shift_logits = logits[:stream.input_length - 1, ]
             loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-            loss = loss_fct(shift_logits.to("cuda:0"), shift_labels.to("cuda:0"))
+            loss = loss_fct(shift_logits.to(self.device), shift_labels.to(self.device))
 
             if stream.generate_config.calculate_loss == 1:
                 loss_mean = loss.sum(dim=0) / (stream.input_length - 1)
@@ -364,18 +365,18 @@ class NormalModelExecutor(ExecutorBase):
         sequence_lengths = self._to_cuda_tensor(gen_lengths)
         # TODO: These tensors are allocated on each iteration. Try allocate them once for each query.
 
-        finished = torch.zeros((batch_query.total_batch_size * batch_query.num_beams), device="cuda:0").bool()
+        finished = torch.zeros((batch_query.total_batch_size * batch_query.num_beams), device=self.device).bool()
         self._reconstruct_sampler(batch_query)
 
         token_ids = to_cuda(batch_query.output_token_ids.permute(1, 0).contiguous())
 
         cum_log_probs = torch.concat(
             [stream.cum_log_probs for stream in batch_query.streams], dim=0
-        ).to("cuda:0")
-        output_log_probs = torch.zeros((batch_query.total_batch_size), dtype=torch.float, device='cuda:0')
+        ).to(self.device)
+        output_log_probs = torch.zeros((batch_query.total_batch_size), dtype=torch.float, device=self.device)
         index_log_prob = None
         if batch_query.record_index_prob is not None:
-            index_log_prob = torch.zeros((batch_query.total_batch_size), dtype=torch.float, device='cuda:0')
+            index_log_prob = torch.zeros((batch_query.total_batch_size), dtype=torch.float, device=self.device)
 
         self.model_ops.sampler.do_sampling(SamplingParams(
             batch_query.max_token_len,

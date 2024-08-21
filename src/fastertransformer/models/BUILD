@@ -1,4 +1,5 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 
 test_linkopts = [
     "-lpython3.10",
@@ -29,7 +30,7 @@ cc_library(
     deps = [
         ":weights_define",
         "//:gpt_init_params_hdr",
-        "//3rdparty/flash_attention2:flash_attention2_header",
+        "@flash_attention//:flash_attention2_header",
         "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_header",
         "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_header",
         "//src/fastertransformer/layers:layers",
@@ -40,19 +41,5 @@ cc_library(
     ],
     copts = copts(),
     include_prefix = "src",
-    visibility = ["//visibility:public"],
-)
-
-cc_binary(
-    name = "gpt_gemm",
-    srcs = [
-        "multi_gpu_gpt/gpt_gemm.cc",
-    ],
-    deps = [
-        "//src/fastertransformer/kernels:kernels",
-        "//src/fastertransformer/cuda:gemm_test_utils",
-    ],
-    copts = cuda_copts() + copts() + torch_deps(),
-    linkopts = test_linkopts + ["-ldl"],
     visibility = ["//visibility:public"],
 )

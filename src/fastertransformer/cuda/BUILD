@@ -1,4 +1,5 @@
-load("//:def.bzl", "rpm_library", "torch_deps", "copts", "cuda_copts", "rocm_copts")
+load("//:def.bzl", "rpm_library", "copts", "cuda_copts", "rocm_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 
 cc_library(
     name = "cublas",
@@ -39,7 +40,7 @@ cc_library(
         "//src/fastertransformer/core:types",
         "@local_config_cuda//cuda:cuda",
         "@local_config_cuda//cuda:cudart",
-        "//3rdparty/flash_attention2:flash_attention2_header",
+        "@flash_attention//:flash_attention2_header",
         "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_header",
         "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_header",
         ":memory_utils",
@@ -83,14 +84,19 @@ cc_library(
         "custom_ar/custom_ar_comm.h"
     ],
     deps = [
-        ":cuda_utils",
         ":nccl",
-        ":memory_utils",
-        "//src/fastertransformer/core:types",
-        "//src/fastertransformer/kernels:kernels_cu",
-        "@local_config_cuda//cuda:cuda",
-        "@local_config_cuda//cuda:cudart"
-    ],
+    ] + select({
+        "//:using_cuda": [  ":cuda_utils",
+                            ":memory_utils",
+                            "//src/fastertransformer/core:types",
+                            "//src/fastertransformer/kernels:kernels_cu",
+                            "@local_config_cuda//cuda:cuda",
+                            "@local_config_cuda//cuda:cudart",],
+        "//:using_rocm": [  "//src/fastertransformer/rocm:memory_utils",
+                            "//src/fastertransformer/rocm:rocm_utils",
+                            "//src/fastertransformer/kernels:gpt_kernels_rocm",]}),
+
+                            
     copts = copts(),
     include_prefix = "src",
     visibility = ["//visibility:public"],
@@ -106,11 +112,13 @@ cc_library(
         "nccl/nccl_utils_torch.h",
         "nccl/nccl_utils.h",
     ],
-    deps = torch_deps() + [
-        ":cuda_utils",
-        "@local_config_cuda//cuda:cuda",
-        "@local_config_cuda//cuda:cudart",
-    ],
+    deps = torch_deps() + select({
+        "//:using_cuda": [":cuda_utils",
+                          "@local_config_cuda//cuda:cuda",
+                          "@local_config_cuda//cuda:cudart",],
+        "//:using_rocm": ["//src/fastertransformer/rocm:rocm_utils"],
+        "//conditions:default": [],
+    }),
     copts = copts(),
     include_prefix = "src",
     visibility = ["//visibility:public"],
@@ -249,6 +257,22 @@ cc_library(
 )
 
 cc_library(
+    name = "torch_cuda_allocator",
+    srcs = [
+        "torch_cuda_allocator.cc"
+    ],
+    hdrs = [
+        "torch_cuda_allocator.h"
+    ],
+    copts = cuda_copts(),
+    deps = [
+        "//src/fastertransformer/core:allocator",
+    ] + torch_deps(),
+    include_prefix = "src",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "allocator_cuda",
     srcs = [
         "allocator_cuda.cc"
@@ -313,30 +337,6 @@ cc_library(
         "@local_config_cuda//cuda:cudart",
     ],
     include_prefix = "src",
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "gemm_test_utils",
-    srcs = [
-        "gemm_test/encoder_igemm_func.cc",
-        "gemm_test/encoder_gemm_func.cc",
-        "gemm_test/gpt_gemm_func.cc",
-        "gemm_test/gemm_func.cc",
-    ],
-    hdrs = [
-        "gemm_test/encoder_igemm_func.h",
-        "gemm_test/encoder_gemm_func.h",
-        "gemm_test/gpt_gemm_func.h",
-        "gemm_test/gemm_func.h",
-    ],
-    deps = [
-        ":cuda_utils",
-        ":cublas",
-        "@local_config_cuda//cuda:cuda",
-        "@local_config_cuda//cuda:cudart",
-    ],
-    copts = copts(),
     visibility = ["//visibility:public"],
 )
 

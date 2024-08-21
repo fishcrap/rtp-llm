@@ -1,6 +1,6 @@
+#include "src/fastertransformer/devices/cuda_impl/CudaDevice.h"
 #include "src/fastertransformer/devices/base_tests/LayerNormTest.hpp"
 #include "src/fastertransformer/devices/cuda_impl/tests/CudaTestUtils.h"
-#include "src/fastertransformer/devices/cuda_impl/CudaDevice.h"
 #include "src/fastertransformer/devices/Weights.h"
 #include "src/fastertransformer/kernels/rmsnormKernels.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
@@ -70,6 +70,7 @@ TEST_F(LayerNormTest, testAddBiasPerformance) {
                         stream
                     );
                     invokeGeneralLayerNorm(
+                        (TestType*)input->data(),
                         (TestType*)input->data(),
                         (TestType*)input->data(),
                         (TestType*)gamma->data(),

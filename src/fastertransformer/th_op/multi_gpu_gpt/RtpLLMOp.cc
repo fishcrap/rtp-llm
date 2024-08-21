@@ -22,7 +22,8 @@ RtpLLMOp::RtpLLMOp() {}
 
 void RtpLLMOp::init(const ft::GptInitParameter& gpt_init_params,
                     py::object                  py_layers_weights,
-                    py::object                  py_global_weights) {
+                    py::object                  py_global_weights,
+                    py::object                  mm_process_engine) {
     AUTIL_ROOT_LOG_CONFIG();
     AUTIL_ROOT_LOG_SETLEVEL(INFO);
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -37,22 +38,22 @@ void RtpLLMOp::init(const ft::GptInitParameter& gpt_init_params,
         auto kmon_tags = rtp_llm::getHippoTags();
         params.metrics_reporter.reset(new kmonitor::MetricsReporter("", "", kmon_tags));
     }
-    grpc_server_thread_ = std::thread(&RtpLLMOp::_init, this, gpt_init_params.model_rpc_port_, std::move(params));
+    grpc_server_thread_ = std::thread(&RtpLLMOp::_init, this, gpt_init_params.model_rpc_port_, std::move(params), std::move(mm_process_engine));
     grpc_server_thread_.detach();
     while (!is_server_ready_) {
         sleep(1);  // wait 1s for server ready
     }
 }
 
-void RtpLLMOp::addLoRA(const int64_t lora_id, py::object py_lora_a_weights, py::object py_lora_b_weights) {
-    auto convert = rtp_llm::WeightsConverter(false);
+void RtpLLMOp::addLora(const int64_t lora_id, py::object py_lora_a_weights, py::object py_lora_b_weights) {
+    auto convert = rtp_llm::WeightsConverter(true);
     auto lora_a_weights = convert.convertLayerWeights_(py_lora_a_weights);
     auto lora_b_weights = convert.convertLayerWeights_(py_lora_b_weights);
-    model_rpc_server_->addLoRA(lora_id, *lora_a_weights, *lora_b_weights);
+    model_rpc_server_->addLora(lora_id, *lora_a_weights, *lora_b_weights);
 }
 
-void RtpLLMOp::removeLoRA(const int64_t lora_id) {
-    model_rpc_server_->removeLoRA(lora_id);
+void RtpLLMOp::removeLora(const int64_t lora_id) {
+    model_rpc_server_->removeLora(lora_id);
 }
 
 std::tuple<int64_t, int64_t> RtpLLMOp::getKVCacheInfo() {
@@ -60,9 +61,9 @@ std::tuple<int64_t, int64_t> RtpLLMOp::getKVCacheInfo() {
     return std::make_tuple(info.available_kv_cache, info.total_kv_cache);
 }
 
-void RtpLLMOp::_init(const int64_t model_rpc_port, const rtp_llm::EngineInitParams params) {
+void RtpLLMOp::_init(const int64_t model_rpc_port, const rtp_llm::EngineInitParams params, py::object mm_process_engine) {
     std::string server_address("0.0.0.0:" + std::to_string(model_rpc_port));
-    model_rpc_server_.reset(new rtp_llm::ModelRpcServiceImpl(params));
+    model_rpc_server_.reset(new rtp_llm::ModelRpcServiceImpl(params, mm_process_engine));
     if (model_rpc_port < 0) {
         is_server_ready_ = true;
         return;
@@ -95,8 +96,8 @@ void registerRtpLLMOp(const py::module& m) {
     pybind11::class_<torch_ext::RtpLLMOp>(m, "RtpLLMOp")
         .def(pybind11::init<>())
         .def("init", &torch_ext::RtpLLMOp::init)
-        .def("add_lora", &torch_ext::RtpLLMOp::addLoRA)
-        .def("remove_lora", &torch_ext::RtpLLMOp::removeLoRA)
+        .def("add_lora", &torch_ext::RtpLLMOp::addLora)
+        .def("remove_lora", &torch_ext::RtpLLMOp::removeLora)
         .def("get_kv_cache_info", &torch_ext::RtpLLMOp::getKVCacheInfo)
         .def("stop", &torch_ext::RtpLLMOp::stop);
 }

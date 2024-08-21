@@ -28,13 +28,10 @@ def th_transformer_so():
         })
     )
 
-    native.genrule(
-        name = "libth_transformer_so",
-        srcs = [":th_transformer_so"],
-        outs = [
-            "libth_transformer.so",
-        ],
-        cmd = " && ".join(["cp $(SRCS) $(@D)"])
+def embedding_arpc_deps():
+    native.alias(
+        name = "embedding_arpc_deps",
+        actual = "//maga_transformer/cpp/embedding_engine:embedding_engine_arpc_server_impl"
     )
 
 def whl_deps():
@@ -44,6 +41,24 @@ def whl_deps():
         # "//:using_arm": ["torch==2.3.0"],
         "//conditions:default": ["torch==2.1.0+cu118"],
     })
+
+def torch_deps():
+    torch_version = "2.1_py310"
+    deps = select({
+        "@//:using_rocm": [
+            "@torch_2.1_py310_rocm//:torch_api",
+            "@torch_2.1_py310_rocm//:torch",
+            "@torch_2.1_py310_rocm//:torch_libs",],
+        "//:using_arm": [
+            "@torch_2.3_py310_cpu_aarch64//:torch_api",
+            "@torch_2.3_py310_cpu_aarch64//:torch",
+            "@torch_2.3_py310_cpu_aarch64//:torch_libs",],
+        "//conditions:default": [
+            "@torch_" + torch_version + "//:torch_api",
+            "@torch_" + torch_version + "//:torch",
+            "@torch_" + torch_version + "//:torch_libs",]
+        })
+    return deps
 
 def cutlass_kernels_interface():
     native.alias(
@@ -61,4 +76,3 @@ def cutlass_kernels_interface():
             "//conditions:default": "//src/fastertransformer/cutlass:cutlass_headers",
         })
     )
-

@@ -4,6 +4,7 @@
 #include "maga_transformer/cpp/dataclass/GenerateStream.h"
 #include "maga_transformer/cpp/dataclass/EngineInitParameter.h"
 #include "src/fastertransformer/devices/DeviceBase.h"
+#include "maga_transformer/cpp/lora/LoraManager.h"
 
 namespace ft = fastertransformer;
 
@@ -19,13 +20,14 @@ public:
         return device_;
     }
 
-    virtual absl::Status addLoRA(const int64_t                                                           lora_id,
-                                 const std::vector<std::unordered_map<std::string, ft::ConstBufferPtr>>& lora_a_weights,
-                                 const std::vector<std::unordered_map<std::string, ft::ConstBufferPtr>>& lora_b_weights) = 0;
+    void addLora(int64_t lora_id, ft::lora::loraLayerWeightsMap lora_a, ft::lora::loraLayerWeightsMap lora_b);
 
-    virtual absl::Status removeLoRA(const int64_t lora_id) = 0;
+    void removeLora(int64_t lora_id);
+
+    std::shared_ptr<lora::LoraManager> getLoraManager();
 
     virtual std::shared_ptr<GenerateStream> enqueue(const std::shared_ptr<GenerateInput>& input) = 0;
+
     virtual absl::Status stop() = 0;
 
     virtual KVCacheInfo getKVCacheInfo() const {
@@ -33,6 +35,7 @@ public:
     }
 protected:
     ft::DeviceBase* device_;
+    std::shared_ptr<lora::LoraManager> lora_manager_;
 };
 
 }  // namespace rtp_llm

@@ -28,7 +28,11 @@ class OpenaiEndopoint():
     def __init__(self, model: Union[AsyncModel, BaseModel]):
         self.model = model
         self.max_seq_len = self.model.config.max_seq_len
-        self.vit_engine = MMProcessEngine()
+        if self.model.is_multimodal():
+            if isinstance(self.model, AsyncModel):
+                self.vit_engine = MMProcessEngine(self.model.model)
+            else:
+                self.vit_engine = MMProcessEngine(self.model)
 
         tokenizer = self.model.tokenizer
         if (tokenizer == None):
@@ -52,6 +56,7 @@ class OpenaiEndopoint():
         )
 
         self.chat_renderer: CustomChatRenderer = ChatRendererFactory.get_renderer(self.tokenizer, render_params)
+        logging.info(f"Finally openai endpoint uses renderer: {self.chat_renderer} ")
         self.template_renderer: CustomChatRenderer = self.chat_renderer \
             if (type(self.chat_renderer) == BasicRenderer) \
             else BasicRenderer(self.tokenizer, render_params)
@@ -90,6 +95,8 @@ class OpenaiEndopoint():
             config.chat_id = request.chat_id
         if request.seed != None:
             config.random_seed = request.seed
+        config.add_special_tokens(self.model.config.special_tokens)
+        config.convert_select_tokens(self.model.config.vocab_size, self.tokenizer)
         return config
 
     async def _collect_complete_response(
@@ -120,7 +127,7 @@ class OpenaiEndopoint():
                 for i in range(len(all_choices)):
                     if all_choices[i].message.content == None:
                         all_choices[i].message.content = (response.choices[i].delta.content or None)
-                    else: 
+                    else:
                         all_choices[i].message.content += (response.choices[i].delta.content or "")
                     all_choices[i].message.role = response.choices[i].delta.role or all_choices[i].message.role
                     all_choices[i].message.function_call = response.choices[i].delta.function_call or all_choices[i].message.function_call
@@ -191,7 +198,10 @@ class OpenaiEndopoint():
         generate_config = self._extract_generation_config(chat_request)
 
         if self.model.is_multimodal():
-            images = self.vit_engine.submit(input_images, self.model.model)
+            if os.environ.get("USE_RPC_MODEL", "0") != "1":
+                images = self.vit_engine.submit(input_images)
+            else:
+                images = input_images
         else:
             images = []
 

@@ -1,4 +1,5 @@
-load("//:def.bzl", "copts", "torch_deps")
+load("//:def.bzl", "copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 
 test_copts = [
     "-fno-access-control",
@@ -43,6 +44,31 @@ cc_test(
         "ops/CpuLayerNormTest.cc",
     ],
     data = [],
+    tags = ["manual"],
+    copts = test_copts,
+    linkopts = test_linkopts,
+    deps = test_deps,
+)
+
+cc_test(
+    name = "cpu_embedding_test",
+    srcs = [
+        "ops/CpuEmbeddingTest.cc",
+    ],
+    data = [],
+    tags = ["manual"],
+    copts = test_copts,
+    linkopts = test_linkopts,
+    deps = test_deps,
+)
+
+cc_test(
+    name = "cpu_gemm_test",
+    srcs = [
+        "ops/CpuGemmTest.cc",
+    ],
+    data = [],
+    tags = ["manual"],
     copts = test_copts,
     linkopts = test_linkopts,
     deps = test_deps,

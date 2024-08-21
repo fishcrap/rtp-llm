@@ -16,7 +16,6 @@
 
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
-#include "src/fastertransformer/kernels/transpose_int8_kernels.h"
 #include "src/fastertransformer/cuda/nvtx/nvtx_utils.h"
 
 namespace fastertransformer {
@@ -185,13 +184,6 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     if (m_tmp % 8 != 0) {
         m_tmp = (m_tmp / 8 + 1) * 8;
     }
-#ifdef SPARSITY_ENABLED
-    const int m_padded        = m_tmp;
-    bool      use_sparse_gemm = sparse_ && cublas_wrapper_->isUseSparse(1, inter_size, m, hidden_units_);
-#else
-    constexpr bool use_sparse_gemm = false;
-    constexpr int  m_padded        = 0;
-#endif
     const int cur_inter_size = quant_algo_.weightOnly() ? inter_padding_size : inter_size;
     gemm_runner_->Gemm(m,
                        cur_inter_size,
@@ -566,7 +558,7 @@ void FfnLayer<T>::genericActivation(int          layer_id,
             INVOKE_GENERIC_ACT(GeluActivationNoneApproximate);
             break;
         default:
-            FT_CHECK_WITH_INFO(false, "not support activation type");
+            FT_FAIL("not support activation type");
             break;
     }
 }

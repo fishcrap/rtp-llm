@@ -7,6 +7,7 @@ from transformers import PreTrainedTokenizerBase
 
 from maga_transformer.config.gpt_init_model_parameters import GptInitModelParameters
 from maga_transformer.async_decoder_engine.embedding.interface import EngineInputs, EngineOutputs
+from maga_transformer.distribute.worker_info import g_parallel_info
 from maga_transformer.models.downstream_modules.custom_module import CustomRenderer
 from maga_transformer.models.downstream_modules.common_input_generator import CommonInputGenerator
 from maga_transformer.models.downstream_modules.embedding.api_datatype import SimilarityRequest, SimilarityResponse, OpenAIEmbeddingRequest, \
@@ -25,7 +26,7 @@ def combo_to_batch(hidde_states: torch.Tensor, input_ids: torch.Tensor, input_le
     # create attention mask from input_length
     max_input_length: int = max(input_lengths)
     batch_size = len(input_lengths)
-    batched_attention_mask = torch.ones((batch_size, max_input_length), dtype=torch.bool, device="cuda:0")
+    batched_attention_mask = torch.ones((batch_size, max_input_length), dtype=torch.bool, device=g_parallel_info.device)
     for b, input_length in enumerate(input_lengths):
         batched_attention_mask[b, input_length:] = 0
     return batched_input_ids, batched_hidden_states, batched_attention_mask
@@ -59,11 +60,11 @@ class EmbeddingRendererBase(CustomRenderer):
         else:
             return OpenAIEmbeddingRequest(**request_json)
 
-    async def create_input(self, request: Union[OpenAIEmbeddingRequest, SimilarityRequest]):
+    def create_input(self, request: Union[OpenAIEmbeddingRequest, SimilarityRequest]):
         if isinstance(request, OpenAIEmbeddingRequest):
-            engine_inputs = await self.generator.generate(request.input)
+            engine_inputs = self.generator.generate(request.input)
         else:
-            engine_inputs = await self.generator.generate(request.left + request.right)
+            engine_inputs = self.generator.generate(request.left + request.right)
         return engine_inputs
 
     def embedding_func(self, request: BaseModel, res: torch.Tensor, input_length: int, input_tokens: torch.Tensor) -> Union[List[float], Dict[str, float], Dict[int, float]]:

@@ -400,7 +400,6 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
         if (output_tensors->isExist("output_log_probs")) {
             Tensor output_log_probs = output_tensors->at("output_log_probs");
             int    max_input_length = input_tensors->at("max_input_length").getVal<int>();
-            size_t step_offset      = (step - max_input_length) * batch_size * beam_width;
             decode_output_tensors.insert(
                 {"output_log_probs", output_log_probs.slice({local_batch_size * beam_width}, local_batch_offset)});
         }
@@ -481,7 +480,7 @@ bool DynamicDecodeLayer<T>::hasDiffRuntimeArgs(TensorMap* input_tensors) {
                         }
                         break;
                     default:
-                        FT_CHECK_WITH_INFO(false, runtime_arg_names_[i] + ": " + tensor.toString() + " is invalid.");
+                        FT_FAIL(runtime_arg_names_[i] + ": " + tensor.toString() + " is invalid.");
                         break;
                 }
             }

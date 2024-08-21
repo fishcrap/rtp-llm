@@ -1,29 +1,11 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 load("//bazel:arch_select.bzl", "cutlass_kernels_interface")
 
 cutlass_kernels_interface()
-################################ cpp test ################################
-
-test_copts = [
-    "-fno-access-control",
-] + cuda_copts() + copts()
-
-test_linkopts = [
-    "-lpython3.10",
-    "-ltorch",
-    "-lc10",
-    "-ltorch_cpu",
-    "-ltorch_python",
-    "-L/usr/local/cuda/lib64",
-    "-lcudart",
-    "-lcuda",
-    "-lnccl",
-    "-lnvToolsExt",
-]
 
 cc_library(
     name = "test_lib",
-    hdrs = ["unittests/unittest_utils.h", "unittests/gtest_utils.h"],
     deps = torch_deps() + [
         "//src/fastertransformer/cuda:allocator_cuda",
         "//src/fastertransformer/devices:devices_base_impl",
@@ -33,70 +15,13 @@ cc_library(
         "//src/fastertransformer/cuda:cuda",
         "//src/fastertransformer/layers:layers",
         "//src/fastertransformer/models:models",
-        "//3rdparty/flash_attention2:flash_attention2_impl",
+        "@flash_attention//:flash_attention2_impl",
         "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_impl",
         "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_impl",
         "@com_google_googletest//:gtest",
     ],
     visibility = ["//visibility:public"],
     alwayslink = True,
-)
-
-cc_test(
-    name = "test_activation",
-    srcs = ["unittests/test_activation.cu"],
-    deps = [":test_lib"],
-    copts = test_copts,
-    linkopts = test_linkopts,
-    visibility = ["//visibility:public"],
-)
-
-cc_test(
-    name = "test_attention_kernels",
-    srcs = ["unittests/test_attention_kernels.cu"],
-    deps = [":test_lib"],
-    copts = test_copts,
-    linkopts = test_linkopts,
-    visibility = ["//visibility:public"],
-    tags = ["exclusive"]
-)
-
-# cc_test(
-#     name = "test_context_decoder_layer",
-#     srcs = ["unittests/test_context_decoder_layer.cu"],
-#     deps = [":test_lib"],
-#     copts = test_copts,
-#     linkopts = test_linkopts,
-#     visibility = ["//visibility:public"],
-# )
-
-cc_test(
-    name = "test_gemm",
-    srcs = ["unittests/test_gemm.cu"],
-    deps = [":test_lib"],
-    copts = test_copts,
-    linkopts = test_linkopts,
-    visibility = ["//visibility:public"],
-)
-
-cc_test(
-    name = "test_gpt_kernels",
-    srcs = ["unittests/test_gpt_kernels.cu"],
-    deps = [":test_lib"],
-    copts = test_copts,
-    linkopts = test_linkopts,
-    visibility = ["//visibility:public"],
-)
-
-cc_test(
-    name = "test_int8",
-    srcs = ["unittests/test_int8.cu", "unittests/test_logprob_kernels.cu",
-            "unittests/test_penalty_kernels.cu",
-            "unittests/test_tensor.cu"],
-    deps = [":test_lib"],
-    copts = test_copts,
-    linkopts = test_linkopts,
-    visibility = ["//visibility:public"],
 )
 
 ################################ py test ################################
@@ -110,11 +35,6 @@ cc_library(
         "gemm_dequantize/*.cc",
         "gemm_group/*.cc",
         "int8_gemm/*.cc",
-        "unittests/test_activation.cu",
-        # "moe/*.cc"
-    ]),
-    hdrs = glob([
-        "unittests/unittest_utils.h",
     ]),
     deps = torch_deps() + [
         "//src/fastertransformer/kernels:kernels",
@@ -189,47 +109,3 @@ py_test(
         "//maga_transformer:torch",
     ],
 )
-
-py_test(
-    name = "test_th_decode_op",
-    srcs = [
-        "unittests/th_op/test_th_decode_op.py"
-    ],
-    data = [
-        "//:th_transformer",
-        ":test_ops",
-    ],
-    deps = [
-        "//maga_transformer:torch",
-    ],
-)
-
-
-py_test(
-    name = "th_int8_gemm",
-    srcs = [
-        "int8_gemm/th_int8_gemm.py"
-    ],
-    data = [
-        "//:th_transformer",
-        ":test_ops",
-    ],
-    deps = [
-        "//maga_transformer:torch",
-    ],
-)
-
-# py_test(
-#     name = "th_moe",
-#     srcs = [
-#         "moe/th_moe.py"
-#     ],
-#     data = [
-#         "//:th_transformer",
-#         ":test_ops",
-#     ],
-#     deps = [
-#         "//maga_transformer:torch",
-#     ],
-#     timeout = "long"
-# )

@@ -20,6 +20,7 @@ public:
     BufferPtr gemm(const GemmParams& params);
     GroupedGemmOutput groupedGemm(const GroupedGemmParams& params);
     BufferPtr embeddingLookup(const EmbeddingLookupParams& params);
+    BufferPtr multimodalEmbedding(const MultimodalEmbeddingParams& params);
     void activation(const ActivationParams& params);
     BufferPtr softmax(const SoftmaxParams& params);
     AttentionModuleOutput contextAttention(const AttentionModuleParams& params);
@@ -29,7 +30,7 @@ public:
     void sampleGreedy(const GreedyParams& params);
     void sampleBeamSearch(const BeamSearchParams& params);
     void broadcast(const BroadcastParams& params);
-    void allReduce(const AllReduceParams& params);
+    AllReduceOutput allReduce(const AllReduceParams& params);
 
 private:
     std::unique_ptr<IAllocator> allocator_;

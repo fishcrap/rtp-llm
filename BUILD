@@ -1,6 +1,5 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
-load("//bazel:arch_select.bzl", "th_transformer_so")
-load("//bazel:arch_select.bzl", "cutlass_kernels_interface")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "torch_deps", "th_transformer_so", "cutlass_kernels_interface")
 
 cutlass_kernels_interface()
 
@@ -81,6 +80,7 @@ filegroup(
     srcs = [
         "src/fastertransformer/th_op/GptInitParameter.cc",
         "src/fastertransformer/th_op/init.cc",
+        "src/fastertransformer/th_op/common/LogLevelOps.cc",
         "src/fastertransformer/th_op/multi_gpu_gpt/RtpEmbeddingOp.cc",
         "src/fastertransformer/th_op/multi_gpu_gpt/EmbeddingHandlerOp.cc",
         "src/fastertransformer/th_op/multi_gpu_gpt/RtpLLMOp.cc",
@@ -94,7 +94,10 @@ filegroup(
             "src/fastertransformer/th_op/common/NcclOp.cc",
             "src/fastertransformer/th_op/common/WeightOnlyQuantOps.cc",
             "src/fastertransformer/th_op/multi_gpu_gpt/ParallelGptOp.cc",
-            "src/fastertransformer/th_op/multi_gpu_gpt/WeightTransposeCalibrateQuantizeOp.cc",
+        ],
+        "//:using_rocm": [
+            "src/fastertransformer/th_op/th_utils.cc",
+            "src/fastertransformer/th_op/common/WeightOnlyQuantOps.cc",
         ],
         "//conditions:default": [],
     }),
@@ -132,7 +135,7 @@ cc_binary(
     ] + select({
         "//:using_cuda": [
             "cutlass_kernels_interface",
-            "//3rdparty/flash_attention2:flash_attention2_impl",
+            "@flash_attention//:flash_attention2_impl",
             "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_impl",
             "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_impl",
         ],
@@ -140,6 +143,9 @@ cc_binary(
     }),
     copts = copts(),
     linkshared = 1,
+    linkopts = [
+        "-Wl,-rpath='$$ORIGIN'"
+    ],
     visibility = ["//visibility:public"],
 )
 

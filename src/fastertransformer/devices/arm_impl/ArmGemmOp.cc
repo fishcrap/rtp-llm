@@ -130,7 +130,7 @@ BufferPtr ArmCpuDevice::gemm_acl(const GemmParams& params) {
     src_tensor.allocator()->free();
     wei_tensor.allocator()->free();
 
-    return std::move(output);
+    return output;
 }
 
 }  // namespace fastertransformer

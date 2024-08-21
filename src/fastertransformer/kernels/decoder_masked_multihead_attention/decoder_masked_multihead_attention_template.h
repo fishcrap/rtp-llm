@@ -15,9 +15,8 @@
  */
 #pragma once
 
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
+#include "decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/kernels/kv_cache_utils.h"
 #include "src/fastertransformer/kernels/rotary_position_embedding.h"
 
@@ -1194,7 +1193,9 @@ template<
     // Whether has beams.
     bool HAS_BEAMS,
     // Whether enable multi-block mode for long-sequence-length.
-    bool DO_MULTI_BLOCK = false,
+    bool DO_MULTI_BLOCK,
+
+    RopeStyle ROPE_STYLE,
     // The number of threads per key.
     unsigned THREADS_PER_KEY = threads_per_key<T, dh_max(Dh)>(),
     // The number of threads per value.
@@ -1415,8 +1416,6 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     zero(k);
     zero(q_bias);
     zero(k_bias);
-    float rotary_embedding_base  = params.rotary_embedding_base;
-    float rotary_embedding_scale = params.rotary_embedding_scale;
     if (is_valid_qk_vec) {
 
         // Query
@@ -1499,33 +1498,26 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     }
     const int input_len            = (params.input_lengths == nullptr) ? 0 : params.input_lengths[batch_beam_idx];
     int       prefix_prompt_length = (params.prefix_prompt_lengths == nullptr) ? 0 : params.prefix_prompt_lengths[batch_beam_idx];
-    if (params.rotary_embedding_dim > 0) {
-        const int position_id = params.position_ids == nullptr ? -1 : params.position_ids[batch_beam_idx];
-        attention_rope(params.rotary_embedding_style,
-                      q,
-                      k,
-                      reinterpret_cast<T*>(smem_),
-                      tidx,
-                      tlength,
-                      timestep,
-                      params.rotary_embedding_dim,
-                      params.length_per_sample[batch_beam_idx],
-                      params.rotary_embedding_base,
-                      params.rotary_embedding_scale,
-                      params.rotary_embedding_max_positions,
-                      params.original_max_position_embeddings,
-                      params.base_scale,
-                      position_id,
-                      input_len,
-                      prefix_prompt_length,
-                      count_prefix_length,
-                      params.logn_seq_len,
-                      HANDLE_KV);
-    }
+    const int position_id = params.position_ids == nullptr ? -1 : params.position_ids[batch_beam_idx];
+    attention_rope<T, Qk_vec_k, ROPE_STYLE>(
+            params.rope_config,
+            q,
+            k,
+            reinterpret_cast<T*>(smem_),
+            tidx,
+            tlength,
+            timestep,
+            params.length_per_sample[batch_beam_idx],
+            position_id,
+            input_len,
+            prefix_prompt_length,
+            count_prefix_length,
+            HANDLE_KV);
+
     __syncthreads();
 
     if (params.use_logn_attn && is_valid_qk_vec) {
-        logn_attention(q, tlength, params.logn_seq_len);
+        logn_attention(q, tlength, params.rope_config.max_pos);
     }
 
     // For the same reason as HANDLE_KV, no compute needed in Cross-Attention's 1st step
@@ -1689,8 +1681,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     // The slope for ALiBi.
     float linear_bias_slope = 0.f;
     if (params.linear_bias_slopes != nullptr) {
-        // TODO: Use a cleaner code to convert from T to float.
-        linear_bias_slope = mul<float>(params.linear_bias_slopes[hi], 1.f);
+        linear_bias_slope = params.linear_bias_slopes[hi];
     }
 
     // Handle only context key cache with beam searching.
@@ -1725,7 +1716,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
         for (int k_loop = 0; k_loop < K_LOOP_UNROLL; ++k_loop) {
             const int local_time_now = time_now + k_loop * K_PER_ITER;
             const int local_ti       = ti + k_loop * K_PER_ITER;
-             
+
             float k_scale = 1.f;
 
             if constexpr (ENABLE_8BITS_CACHE) {

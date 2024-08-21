@@ -1,5 +1,7 @@
 from typing import Optional, List, Dict, Any, Union, Callable, AsyncGenerator
+import os
 import torch
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from PIL import Image
@@ -114,13 +116,13 @@ class CustomChatRenderer():
     ) -> AsyncGenerator[StreamResponseObject, None]:
 
         token_type_ids = []
-        if model.is_multimodal() and len(images) > 0:
-            images = await MMProcessEngine.get(images)
+        if model.is_multimodal() and len(images) > 0 and os.environ.get("USE_RPC_MODEL", "0") != "1":
+            tasks = [asyncio.create_task(MMProcessEngine.get(images))]
+            await asyncio.wait(tasks)
+            images = tasks[0].result()
 
-        if model.is_multimodal():
+        if model.is_multimodal() and os.environ.get("USE_RPC_MODEL", "0") != "1":
             input_ids, images, token_type_ids = model.expand_token_id(input_ids, images)
-        
-        input_token_length = len(input_ids)
 
         input_id_tensor = torch.Tensor(input_ids).int().unsqueeze(0)
 
@@ -136,18 +138,16 @@ class CustomChatRenderer():
             )
         )
 
-        async for response in self.render_response_stream(output_generator, 
-                                                          request, 
-                                                          generate_config,
-                                                          input_token_length):
+        async for response in self.render_response_stream(output_generator,
+                                                          request,
+                                                          generate_config):
             yield response
 
     async def render_response_stream(
             self,
             output_generator: AsyncGenerator[GenerateOutputs, None],
             request: ChatCompletionRequest,
-            generate_config: GenerateConfig,
-            input_token_length: int
+            generate_config: GenerateConfig
     ) -> AsyncGenerator[StreamResponseObject, None]:
         index = 0
         output_token_length = 0
@@ -189,12 +189,13 @@ class CustomChatRenderer():
             index += 1
             output = outputs.generate_outputs[0]
             # all model incremental return output_ids
+            input_token_length = output.aux_info.input_len
             output_tokens_list = torch.cat((output_tokens_list, output.output_ids), dim=1)
             output.output_ids = output_tokens_list
             output_ids = output.output_ids
             output_ids = self._clean_output_ids(output_ids)
             output_token_length = len(output_ids)
-            finish_reason = self._check_finish_reason(output_ids, input_token_length)
+            finish_reason = self._check_finish_reason(output_ids, input_token_length, generate_config.max_new_tokens)
             output_ids = self._remove_stop_word_ids(output_ids)
             # For some tokenizers (e.g. ChatGLM), decode a single token differs from decode a list of tokens.
             decoded_prev_token = self.tokenizer.decode(responded_output_ids[-last_token_length:])
@@ -238,8 +239,10 @@ class CustomChatRenderer():
             aux_info=output.aux_info if request.aux_info else None
         )
 
-    def _check_finish_reason(self, token_ids: List[int], input_token_length: int) -> Optional[FinisheReason]:
+    def _check_finish_reason(self, token_ids: List[int], input_token_length: int, max_new_tokens: int = -1) -> Optional[FinisheReason]:
         stop_word_ids_list_all = self.get_all_extra_stop_word_ids_list() + self.stop_word_ids_list
+        if max_new_tokens > 0 and len(token_ids) >= max_new_tokens:
+            return FinisheReason.length
         if len(token_ids) + input_token_length >= self.max_seq_len:
             return FinisheReason.length
         if token_ids and token_ids[-1] == self.eos_token_id:

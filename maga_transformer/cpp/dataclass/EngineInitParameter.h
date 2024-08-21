@@ -96,7 +96,9 @@ private:
     ft::LayerNormWeightsPtr
     mayCreateLayerNormWeights(const ConstBufferPtrMap& map,
                               const std::string& gamma_key,
-                              const std::string& beta_key = "");
+                              const std::string& beta_key = "",
+                              const std::string& scale_key = "",
+                              const std::string& scale_reciprocal_key = "");
 
     ft::FfnLayerWeights
     createFfnWeights(const ConstBufferPtrMap& map);
@@ -110,6 +112,7 @@ private:
     bool            need_copy_;
     ft::QuantAlgo   quant_algo_;
     ft::DeviceBase* device_;
+    bool use_linear_bias_slopes_;
 };
 
 }  // namespace rtp_llm

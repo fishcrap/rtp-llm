@@ -163,6 +163,11 @@ class GptInitModelParameters:
         self.add_special_tokens = True
         self.template_type = TemplateType.chat
         self.build_position_ids = False
+        use_rpc_model = bool(int(os.environ.get("USE_RPC_MODEL", 0)))
+        if use_rpc_model:
+            self.local_rank = g_parallel_info.local_rank
+        else:
+            self.local_rank = 0
 
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -294,6 +299,7 @@ class GptInitModelParameters:
         
     def update_task_type_use_kvcache(self):
         self.task_type = check_task_type(self.ckpt_path)
+        self.setTaskType(self.task_type.value)
         self.use_kvcache = (self.task_type == TaskType.LANGUAGE_MODEL)
         logging.info(f"model task type: {self.task_type}, use_kvcache: {self.use_kvcache}")
 
@@ -351,7 +357,13 @@ class GptInitModelParameters:
         
         self.enable_partial_fallback = bool(int(os.environ.get('ENABLE_PARTIAL_FALLBACK', 0)))
         logging.info(f'enable_partial_fallback: {self.enable_partial_fallback}')
-        
+
+        self.enable_fast_gen = bool(int(os.environ.get('ENABLE_FAST_GEN', 0)))
+        logging.info(f'enable_fast_gen: {self.enable_fast_gen}')
+        # TODO(xinfei.sxf) fix name
+        self.fast_gen_max_context_len = int(os.environ.get('FAST_GEN_MAX_CONTEXT_LEN', 1024))
+        logging.info(f'fast_gen_max_context_len: {self.fast_gen_max_context_len}')
+
         self.scheduler_reserve_resource_ratio = int(os.environ.get('SCHEDUlER_RESERVE_RESOURCE_RATIO', 5))
         logging.info(f'scheduler_reserve_resource_ratio: {self.scheduler_reserve_resource_ratio}')
         self.reuse_cache = os.environ.get('REUSE_CACHE', None) == '1' or os.environ.get('USE_BLOCK_CACHE', None) == '1'

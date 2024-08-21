@@ -5,12 +5,16 @@
 #include <optional>
 #include <memory>
 #include <unordered_map>
+#include <thread>
+#include <shared_mutex>
 
 namespace fastertransformer {
 
 struct LayerNormWeights {
     ConstBufferPtr gamma = nullptr;
     ConstBufferPtr beta = nullptr;
+    ConstBufferPtr static_scale = nullptr;
+    ConstBufferPtr static_scale_reciprocal = nullptr;
     LayerNormWeights() = default;
 
     LayerNormWeights(ConstBufferPtr& gamma,
@@ -22,6 +26,12 @@ struct LayerNormWeights {
                      BufferPtr& beta) :
         gamma(std::move(gamma)),
         beta(std::move(beta)) {}
+
+    LayerNormWeights(ConstBufferPtr& gamma, ConstBufferPtr& beta, ConstBufferPtr& static_scale, ConstBufferPtr& static_scale_reciprocal):
+        gamma(std::move(gamma)), beta(std::move(beta)), static_scale(std::move(static_scale)), static_scale_reciprocal(std::move(static_scale_reciprocal)) {}
+
+    LayerNormWeights(BufferPtr& gamma, BufferPtr& beta, BufferPtr& static_scale, BufferPtr& static_scale_reciprocal):
+        gamma(std::move(gamma)), beta(std::move(beta)), static_scale(std::move(static_scale)), static_scale_reciprocal(std::move(static_scale_reciprocal)) {}
 };
 
 typedef std::shared_ptr<const LayerNormWeights> LayerNormWeightsPtr;
@@ -50,72 +60,40 @@ struct DenseWeights {
 typedef std::shared_ptr<const DenseWeights> DenseWeightsPtr;
 
 
-struct LoraWeights {
-    ConstBufferPtr A;
-    ConstBufferPtr B;
-};
-typedef std::shared_ptr<const LoraWeights>  LoraWeightsPtr;
-
-struct LoraWeightsMap {
-    std::unordered_map<int64_t, LoraWeights> lora_map_;
-
-    bool hasLoraWeight(int64_t lora_id) const {
-        auto it = lora_map_.find(lora_id);
-        return it != lora_map_.end();
-    }
-
-    LoraWeights getLoraWeight(int64_t lora_id) const {
-        FT_CHECK(hasLoraWeight(lora_id));
-        auto it = lora_map_.find(lora_id);
-        return it->second;
-    }
-
-
-    void setLoRAWeight(int64_t lora_id,
-                       ConstBufferPtr lora_a,
-                       ConstBufferPtr lora_b)
-    {
-        lora_map_[lora_id] = LoraWeights({lora_a, lora_b});
-    }
-
-    void removeLoRAWeight(int64_t lora_id) {
-        if (lora_map_.find(lora_id) == lora_map_.end()) {
-            return;
-        }
-        lora_map_.erase(lora_id);
-    }
-};
-
 struct AttentionLayerWeights {
     std::shared_ptr<const LayerNormWeights> pre_attention_layernorm;
     std::shared_ptr<const DenseWeights>     qkv_weight;
-    std::shared_ptr<LoraWeightsMap>         qkv_lora_weights;
     std::shared_ptr<const LayerNormWeights> attention_layernorm;
 
-    std::shared_ptr<const DenseWeights>     output_weight;
-    std::shared_ptr<LoraWeightsMap>         output_lora_weights;
+    std::shared_ptr<const LayerNormWeights> q_norm_weight;
+    std::shared_ptr<const LayerNormWeights> k_norm_weight;
 
+    std::shared_ptr<const DenseWeights>     output_weight;
+
+    std::shared_ptr<const DenseWeights>     static_quant_weight;
+    std::shared_ptr<const DenseWeights>     static_scale_reciprocal_weight;
     std::shared_ptr<const DenseWeights>     smoother_weight;
     std::shared_ptr<const DenseWeights>     shift_weight;
+
+    std::shared_ptr<const DenseWeights>     linear_bias_slopes_weight;
 };
 
 struct FfnLayerWeights {
     std::shared_ptr<const DenseWeights>     up_weight;
     std::shared_ptr<const DenseWeights>     moe_up_weight;
-    std::shared_ptr<LoraWeightsMap>         up_lora_weights;
 
     std::shared_ptr<const DenseWeights>     gate_weight;
     std::shared_ptr<const DenseWeights>     moe_gate_weight;
-    std::shared_ptr<LoraWeightsMap>         gate_lora_weights;
 
     std::shared_ptr<const DenseWeights>     down_weight;
     std::shared_ptr<const DenseWeights>     moe_down_weight;
-    std::shared_ptr<LoraWeightsMap>         down_lora_weights;
 
     std::shared_ptr<const DenseWeights>     moe_gating_weight;
 
     std::shared_ptr<const DenseWeights>     smoother_weight;
     ConstBufferPtr                          act_scale;
+    std::shared_ptr<const DenseWeights>     intermediate_weight2_static_scale_weight;
+    std::shared_ptr<const DenseWeights>     intermediate_weight2_static_scale_reciprocal_weight;
 
     // these fields are for Qwen Mode model.
     // See https://github.com/huggingface/transformers/blob/0f67ba1d741d65b07d549daf4ee157609ce4f9c1/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L803
@@ -128,6 +106,7 @@ struct LayerWeights {
     AttentionLayerWeights                   self_attention_weights;
     std::shared_ptr<const DenseWeights>     pre_attention_smoother_weight;
     std::shared_ptr<const LayerNormWeights> post_layernorm;
+    std::shared_ptr<const LayerNormWeights> post_layernorm_2;
     FfnLayerWeights                         ffn_weights;
     std::shared_ptr<const LayerNormWeights> post_ffn_layernorm;
 };
@@ -142,6 +121,7 @@ struct Weights {
     std::shared_ptr<const DenseWeights>     token_type_embedding;
     std::vector<LayerWeights>               layers;
     std::shared_ptr<const LayerNormWeights> final_layernorm;
+    std::shared_ptr<const DenseWeights>     linear_bias_slopes;
     std::shared_ptr<const DenseWeights>     lm_head;
     std::shared_ptr<const DenseWeights>     medusa_head;
 };

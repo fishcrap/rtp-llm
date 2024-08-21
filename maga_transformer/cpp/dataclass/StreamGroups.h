@@ -26,6 +26,10 @@ public:
                 max_context_seq_len_ = std::max(max_context_seq_len_, (size_t)stream->contextLength());
                 max_reuse_length_ = std::max(max_reuse_length_, (size_t)stream->reuseLength());
                 cum_context_seq_len_ += (size_t)stream->contextLength();
+                multimodal_features_len_ += stream->multimodalFeaturesLength();
+                if (!has_multimodal_input_ && multimodal_features_len_ > 0) {
+                    has_multimodal_input_ = true;
+                }
             } else {
                 decode_streams_.push_back(stream);
                 model_execute_token_size_ += stream->currentExecuteTokenSize();
@@ -33,6 +37,9 @@ public:
                 total_decode_batch_size_  += stream->batchSize(); 
                 max_block_size_ = std::max(max_block_size_, stream->maxBlockSize());
                 max_seq_len_    = std::max(max_seq_len_, (size_t)stream->seqLength());
+                if (!has_multimodal_input_ && stream->multimodalFeaturesLength() > 0) {
+                    has_multimodal_input_ = true;
+                }
             }
         }
     }
@@ -66,6 +73,12 @@ public:
     }
     size_t cumContextSeqLen() const {
         return cum_context_seq_len_;
+    }
+    size_t mmFeaturesLen() const {
+        return multimodal_features_len_;
+    }
+    bool has_multimodal_input() const {
+        return has_multimodal_input_;
     }
 
     bool empty() const {
@@ -123,6 +136,8 @@ private:
     size_t                       max_context_seq_len_      = 0;
     size_t                       max_reuse_length_         = 0;
     size_t                       cum_context_seq_len_      = 0;
+    size_t                       multimodal_features_len_  = 0;
+    bool                         has_multimodal_input_     = false;
 };
 
 typedef std::shared_ptr<GenerateStream> GenerateStreamPtr;

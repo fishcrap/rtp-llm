@@ -34,6 +34,10 @@ LayernormOutput DeviceOps::layernorm(const LayernormParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
+AddBiasOutput DeviceOps::addbias(const AddBiasParams& params) {
+    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
 BufferPtr DeviceOps::gemm(const GemmParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
@@ -50,11 +54,23 @@ BufferPtr DeviceOps::embeddingLookup(const EmbeddingLookupParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
+BufferPtr DeviceOps::multimodalEmbedding(const MultimodalEmbeddingParams& params) {
+    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
 void DeviceOps::activation(const ActivationParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
 BufferPtr DeviceOps::softmax(const SoftmaxParams& params) {
+    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
+LossOutput DeviceOps::loss(const LossParams& params) {
+    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
+MaskOutput DeviceOps::attentionMask(const MaskParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
@@ -94,7 +110,7 @@ void DeviceOps::broadcast(const BroadcastParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
-void DeviceOps::allReduce(const AllReduceParams& params) {
+AllReduceOutput DeviceOps::allReduce(const AllReduceParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
@@ -107,4 +123,3 @@ BufferPtr DeviceOps::quantize(const QuantizeParams& params) {
 }
 
 } // namespace fastertransformer
-

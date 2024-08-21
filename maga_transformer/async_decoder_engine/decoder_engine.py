@@ -26,7 +26,6 @@ class DecoderEngine(BaseEngine):
         self.scheduler_ = scheduler
         self.config_ = config
         self.wait_decode_counter_ = AtomicCounter()
-        logging.info(f'last mem info:{get_mem_info().used} {get_mem_info().free}')
 
     @override
     def start(self):
@@ -55,7 +54,8 @@ class DecoderEngine(BaseEngine):
         except BaseException as e:
             # Note that BaseException is used here to catch GeneratorExit and ordinary types of Exception.
             error_msg = f"request_id = {stream._stream_id}, exception type = {type(e)}, exception str {str(e)}"
-            logging.info(error_msg)
+            if not isinstance(e, GeneratorExit):
+                logging.info(error_msg)
             # Note: can't release resources here
             stream.set_stop(error_msg, e)
             raise e

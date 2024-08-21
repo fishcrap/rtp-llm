@@ -3,6 +3,8 @@ FROM $BASE_OS_IMAGE
 
 MAINTAINER wangyin.yx
 
+ADD /etc/rc.d/init.d/functions /etc/rc.d/init.d/functions
+
 RUN echo "%sdev ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
     groupadd sdev
 
@@ -10,7 +12,7 @@ RUN dnf install -y \
         unzip wget which findutils rsync tar \
         gcc gcc-c++ libstdc++-static gdb coreutils \
         binutils bash glibc-devel libdb glibc glibc-langpack-en bison lld \
-        emacs-nox git git-lfs && \
+        emacs-nox git git-lfs nfs-utils java-11-openjdk-devel docker && \
     rpm --rebuilddb
 
 ARG CONDA_URL
@@ -31,9 +33,13 @@ RUN wget $AMD_BKC_URL -O /tmp/bkc.tar && \
     cd /tmp/bkc && \
     sed 's/amdgpu-install/amdgpu-install --no-dkms/g' -i install.sh && \
     sh install.sh && \
-    rm -rf /tmp/bkc /tmp/bkc.tar
+    rm -rf /tmp/bkc /tmp/bkc.tar && \
+    yum config-manager --disable amdgpu-local-rpmpackages && \
+    yum config-manager --disable local-rocm
 
 ARG PYPI_URL
 ADD deps /tmp/deps
 RUN /opt/conda310/bin/pip install -r /tmp/deps/requirements_rocm.txt -i $PYPI_URL && \
     rm -rf /tmp/deps && pip cache purge
+
+ENV PATH $PATH:/opt/conda310/bin

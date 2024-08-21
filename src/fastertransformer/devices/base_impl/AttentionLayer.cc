@@ -70,10 +70,33 @@ AttentionLayerOutput DeviceBase::attentionLayer(const AttentionLayerParams& para
     // other devices need to be careful about this.
     // maybe add a device property here.
     auto qkv_gemm_params = GemmParams(input, *(qkv_weight->kernel));
-    const auto qkv = loraLinear(LoraLinearParams(qkv_gemm_params,
-                                                 *(params.weights.qkv_lora_weights),
-                                                 params.common.lora_input)).output;
+    auto qkv = loraLinear(LoraLinearParams(qkv_gemm_params, params.common.lora_input.qkv_lora_input)).output;
     printBufferData(*qkv, "qkv");
+
+    if (!params.configs.fuse_qkv_add_bias && params.weights.qkv_weight) {
+        const auto bias_add_output = addbias({qkv, *(params.weights.qkv_weight->bias)});
+        qkv = std::move(bias_add_output.output);
+        printBufferData(*qkv, "qkv_after_bias_add");
+    }
+
+    if (params.weights.q_norm_weight) {
+        auto after_q_norm = layernorm(LayernormParams(
+            qkv, *params.weights.q_norm_weight, params.ln_params.eps, params.ln_params.norm_type, 0, qkv_merged_size));
+        qkv = std::move(after_q_norm.output);
+        printBufferData(*qkv, "qkv_after_q_norm");
+    }
+
+    if (params.weights.k_norm_weight) {
+        auto after_k_norm = layernorm(
+            LayernormParams(qkv,
+                            *params.weights.k_norm_weight,
+                            params.ln_params.eps,
+                            params.ln_params.norm_type,
+                            params.configs.size_per_head * params.configs.head_num,
+                            qkv_merged_size));
+        qkv = std::move(after_k_norm.output);
+        printBufferData(*qkv, "qkv_after_k_norm");
+    }
 
     // attention layer output is preallocated to avoid memory fragmentation
     // note that this output is returned and further used as residual
@@ -103,29 +126,45 @@ AttentionLayerOutput DeviceBase::attentionLayer(const AttentionLayerParams& para
     }
     printBufferData(*qkv_output, "qkv_output");
 
-    if(params.weights.smoother_weight) {
+    if(params.qscheme != QScheme::NoQuantize) {
+        OptionalConstBufferRef smoother_weight =
+            params.weights.smoother_weight ? (OptionalConstBufferRef) * (params.weights.smoother_weight->kernel) :
+                                             std::nullopt;
+
         OptionalConstBufferRef shift_weight = (params.weights.shift_weight == nullptr) ?
-                                               nullopt :
-                                               (OptionalConstBufferRef)*params.weights.shift_weight->kernel;
+                                                  nullopt :
+                                                  (OptionalConstBufferRef)*params.weights.shift_weight->kernel;
 
-        auto qkv_output_ = quantize({*qkv_output,
-                                     *params.weights.smoother_weight->kernel,
-                                     shift_weight,
-                                     DataType::TYPE_QINT8,
-                                     1});
+        OptionalConstBufferRef static_scale_weight =
+            params.weights.static_quant_weight ?
+                (OptionalConstBufferRef) * (params.weights.static_quant_weight->kernel) :
+                std::nullopt;
 
-        auto output_gemm_params = GemmParams(*qkv_output_, *(output_weight->kernel), nullopt, output);
-        loraLinear(LoraLinearParams(output_gemm_params,
-                                    *(params.weights.output_lora_weights),
-                                    params.common.lora_input)).output;
+        OptionalConstBufferRef static_scale_reciprocal_weight =
+            params.weights.static_scale_reciprocal_weight ?
+                (OptionalConstBufferRef) * (params.weights.static_scale_reciprocal_weight->kernel) :
+                std::nullopt;
+
+        auto quant_params = QuantizeParams(
+            *qkv_output,
+            DataType::TYPE_QINT8,
+            1,
+            params.qscheme,
+            smoother_weight,
+            shift_weight,
+            static_scale_weight,
+            static_scale_reciprocal_weight);
+
+        BufferPtr quantized_attention_output = quantize(quant_params);
+
+        auto output_gemm_params = GemmParams(*quantized_attention_output, *(output_weight->kernel), nullopt, output);
+        loraLinear(LoraLinearParams(output_gemm_params, params.common.lora_input.out_lora_input)).output;
     } else {
         auto output_gemm_params = GemmParams(*qkv_output, *(output_weight->kernel), nullopt, output);
-        loraLinear(LoraLinearParams(output_gemm_params,
-                                    *(params.weights.output_lora_weights),
-                                    params.common.lora_input)).output;
+        loraLinear(LoraLinearParams(output_gemm_params, params.common.lora_input.out_lora_input)).output;
     }
 
-    return {move(output)};
+    return {std::move(output)};
 }
 
 }; // namespace fastertransformer

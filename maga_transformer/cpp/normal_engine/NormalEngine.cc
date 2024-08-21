@@ -20,7 +20,7 @@ NormalEngine::NormalEngine(const EngineInitParams& params) :
     FT_LOG_INFO(__PRETTY_FUNCTION__);
     initCacheManager();
     FT_LOG_INFO("create cache manager done");
-    executor_.reset(new NormalExecutor(params, resource_context_.cache_manager, device_));
+    executor_.reset(new NormalExecutor(params, resource_context_.cache_manager, device_, getLoraManager()));
     FT_LOG_INFO("create normal executor done");
     scheduler_.reset(new FIFOScheduler(params_, resource_context_.cache_manager, metrics_reporter_));
     FT_LOG_INFO("create fifo scheduler done");
@@ -50,20 +50,6 @@ void NormalEngine::initSystemPrompt() {
     }
 }
 
-absl::Status NormalEngine::addLoRA(const int64_t                                                   lora_id,
-                           const std::vector<std::unordered_map<std::string, ft::ConstBufferPtr>>& lora_a_weights,
-                           const std::vector<std::unordered_map<std::string, ft::ConstBufferPtr>>& lora_b_weights) {
-    auto status = executor_->addLoRA(lora_id, lora_a_weights, lora_b_weights);
-    reportMetrics({true, !status.ok(), 0});
-    return status;
-}
-
-absl::Status NormalEngine::removeLoRA(const int64_t lora_id) {
-    auto status = executor_->removeLoRA(lora_id);
-    reportMetrics({true, !status.ok(), 0});
-    return status;
-}
-
 KVCacheInfo NormalEngine::getKVCacheInfo() const {
     return resource_context_.cache_manager->getKVCacheInfo();
 }
@@ -90,6 +76,7 @@ absl::Status NormalEngine::stop() {
 
 void NormalEngine::loop() {
     FT_LOG_INFO("loop begin");
+    device_->preRun();
     while (running_) {
         int64_t step_begin_time_us = autil::TimeUtility::currentTimeInMicroSeconds();
         auto status = step();

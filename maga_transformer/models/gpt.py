@@ -6,7 +6,7 @@ import logging
 from typing import Optional, Union, List, Dict, Any
 import torch.nn.functional as F
 
-from maga_transformer.utils.util import get_device, to_torch_dtype
+from maga_transformer.utils.util import to_torch_dtype
 from maga_transformer.models.gpt_util.rms import RMSNorm
 from maga_transformer.ops.comm.parallel_op import ParallelEmbedding, ParallelLinear
 from maga_transformer.utils.model_weights_loader import get_model_weights_loader, estimate_load_parallel_num, ModelWeightsLoader
@@ -45,17 +45,17 @@ class GPT(BaseModel):
         self.config = config
         self.load_tokenizer()
         self.init_misc()
-        self.init_linear_bias()
         self.init_prefix_encoder()
         self.init_medusa()
         self.init_pipeline_param()
-        self.load('cpu')
-    
+        self.load(self.device)
+        self.init_linear_bias()
+
     def init_misc(self):
         self.task_type = self.config.task_type
         self.custom_module = self.load_custom_module()
         self.compute_dtype = to_torch_dtype(self.config.data_type)
-                    
+
     def split_slopes_tp(self, slopes: torch.Tensor):
         local_head_num = 1 if self.config.head_num == 1 else self.config.head_num // g_parallel_info.tp_size
         start_pos = local_head_num * g_parallel_info.tp_rank
@@ -65,7 +65,8 @@ class GPT(BaseModel):
         if self.config.use_attention_linear_bias:
             slopes = torch.Tensor(get_slopes(self.config.head_num))
             slopes = self.split_slopes_tp(slopes)
-            self.linear_bias_slopes = slopes.to(self.compute_dtype).cuda()
+            self.linear_bias_slopes = slopes.to(torch.float).cuda()
+            self.weight.append_global_weight(W.linear_bias_slopes, self.linear_bias_slopes)
 
     def init_prefix_encoder(self):
         self.prefix_encoder = None
@@ -83,7 +84,7 @@ class GPT(BaseModel):
         hidden_dim = self.config.gpt_init_params.hidden_size
         assert(hidden_dim != 0)
         all_gather = self.config.tp_split_emb_and_lm_head and g_parallel_info.tp_size > 1
-        
+
         if g_parallel_info.is_pp_first:
             self.word_embedding = ParallelEmbedding(all_gather)
             self.position_encoding = ParallelEmbedding(all_gather) if self.config.has_positional_encoding else None
@@ -91,19 +92,19 @@ class GPT(BaseModel):
 
             if self.config.has_pre_decoder_layernorm:
                 if self.config.norm_type == 'layernorm' or self.config.norm_type == 'alphanorm':
-                    self.pre_decoder_layernorm = torch.nn.LayerNorm(hidden_dim, eps=self.config.layernorm_eps, dtype=self.compute_dtype).to('cuda:0')
+                    self.pre_decoder_layernorm = torch.nn.LayerNorm(hidden_dim, eps=self.config.layernorm_eps, dtype=self.compute_dtype).to(self.device)
                 elif self.config.norm_type == 'rmsnorm':
 
-                    self.pre_decoder_layernorm = RMSNorm(hidden_dim, eps=self.config.layernorm_eps, use_bias=True).to('cuda:0')
+                    self.pre_decoder_layernorm = RMSNorm(hidden_dim, eps=self.config.layernorm_eps, use_bias=True).to(self.device)
             else:
                 self.pre_decoder_layernorm = None
 
         if g_parallel_info.is_pp_last:
             if self.config.has_post_decoder_layernorm:
                 if self.config.norm_type == 'layernorm' or self.config.norm_type == 'alphanorm':
-                    self.post_decoder_layernorm = torch.nn.LayerNorm(hidden_dim, eps=self.config.layernorm_eps, dtype=self.compute_dtype).to('cuda:0')
+                    self.post_decoder_layernorm = torch.nn.LayerNorm(hidden_dim, eps=self.config.layernorm_eps, dtype=self.compute_dtype).to(self.device)
                 elif self.config.norm_type == 'rmsnorm':
-                    self.post_decoder_layernorm = RMSNorm(hidden_dim, eps=self.config.layernorm_eps, use_bias=True)
+                    self.post_decoder_layernorm = RMSNorm(hidden_dim, eps=self.config.layernorm_eps, use_bias=True).to(self.device)
             else:
                 self.post_decoder_layernorm = None
             if self.task_type == TaskType.LANGUAGE_MODEL:
@@ -134,26 +135,26 @@ class GPT(BaseModel):
             self.weight.lora_resource.update(lora_infos)
         logging.info(f'update lora weights time: {timer.cost_ms() / 1000 :.2f} s')
 
-    def load(self, device: Union[str, torch.device] = 'cuda:0'):
-        self._load_weights(device)
-        self._initialize_from_weight(device)
+    def load(self, device: str):
+        self._load_weights()
+        self._initialize_from_weight()
 
-    def load_custom_module(self) -> Optional[CustomModule]:        
+    def load_custom_module(self) -> Optional[CustomModule]:
         return create_custom_module(self.task_type, self.config, self.tokenizer)
-    
+
     def _load_custom_module_weights(self, model_weights_loader: ModelWeightsLoader):
         if self.custom_module is not None:
             tensor_names = self.custom_module.handler.tensor_info()
             tensor_map: Dict[str, torch.Tensor] = {}
             for name in tensor_names:
                 tensors = model_weights_loader.load_tensor(name)
-                if len(tensors) !=1 :
+                if len(tensors) != 1:
                     raise Exception(f"load tensor {name} failed, get len=={len(tensors)}")
                 loaded_tensor = tensors[0].cuda()
                 tensor_map[name] = loaded_tensor
                 self.weight.append_global_weight(name, loaded_tensor)
             self.custom_module.handler.init(tensor_map)
-            
+
     def init_database(self):
         if self.config.ref_module is not None:
             self.database = ModuleDatabase(self.config.ref_module)
@@ -166,7 +167,7 @@ class GPT(BaseModel):
         # static lora load
         self.static_lora: bool = self.config.lora_infos is not None and len(self.config.lora_infos) == 1
         if self.static_lora:
-            for name, path in self.config.lora_infos.items():           
+            for name, path in self.config.lora_infos.items():
                 self.database.load_lora(name, path)
             self.database.dump_lora_info()
 
@@ -175,7 +176,7 @@ class GPT(BaseModel):
             self.config, g_parallel_info.tp_size)
         weights_info = self.get_weight_cls()(self.config, g_parallel_info.tp_size, g_parallel_info.tp_rank)
         model_weights_loader = get_model_weights_loader(weights_info, self.database, compute_dtype=self.compute_dtype)
-        self.weight = model_weights_loader.load_weights_from_scratch(device='cpu', num_process=load_parallel_num)
+        self.weight = model_weights_loader.load_weights_from_scratch(num_process=load_parallel_num, device=self.device)
         self._load_custom_module_weights(model_weights_loader)
         if self.static_lora:
             lora_name = list(self.config.lora_infos.keys())[0]
@@ -200,10 +201,8 @@ class GPT(BaseModel):
         if self.config.lora_infos is not None and len(self.config.lora_infos) > 1:
             self.update(self.config.lora_infos)
 
-    def _load_weights(self, 
-                      ref_dict: Dict[str, torch.Tensor] = {},
-                      device: Optional[Union[str, int, torch.device]] = 'cuda:0'):
-        device = device or get_device()
+    def _load_weights(self,
+                      ref_dict: Dict[str, torch.Tensor] = {}):
         with Timer() as timer:
             self.init_database()
             self.load_static_lora()
@@ -213,7 +212,7 @@ class GPT(BaseModel):
     def init_word_embedding_weight(self):
         assert self.word_embedding is not None
         self.word_embedding.set_weight(self.weight.steal_pytorch_weight(W.embedding))
-        self.weight.append_global_weight(W.embedding, self.word_embedding._emb)        
+        self.weight.append_global_weight(W.embedding, self.word_embedding._emb)
         if (self.config.input_embedding_scalar - 1 > 1e-6):
             self.word_embedding.set_scalar(self.config.input_embedding_scalar)
 
@@ -228,7 +227,7 @@ class GPT(BaseModel):
             if self.config.logit_scale != 1.0:
                 lm_head_w = self.config.scale_logit * lm_head_w
             self.lm_head.set_weight(lm_head_w, self.weight.steal_pytorch_weight(W.lm_head_b))
-            self.weight.append_global_weight(W.lm_head, self.lm_head._w)            
+            self.weight.append_global_weight(W.lm_head, self.lm_head._w)
 
             if self.config.tp_split_emb_and_lm_head:
                 self.vocab_size_padded = self.lm_head.weight.shape[0] * g_parallel_info.tp_size
@@ -238,16 +237,16 @@ class GPT(BaseModel):
     def _safe_load_from_module(self, param: torch.nn.Parameter, fname: str):
         # np_w is 1-D array since a bin file doesn't have shape info.
         print(f"load {fname} to {param.data.shape}")
-        param.data = self.weight.steal_pytorch_weight(fname).reshape(param.data.shape).to('cpu')
+        param.data = self.weight.steal_pytorch_weight(fname).reshape(param.data.shape).to(self.device)
 
     def _safe_load_prefix_encoder_weight_from_module(self, param: torch.nn.Parameter, fname: str, ctype: torch.dtype):
         # np_w is 1-D array since a bin file doesn't have shape info.
-        param.data = self.weight.steal_pytorch_weight(fname).reshape(param.data.shape).to(ctype).to('cuda:0')
+        param.data = self.weight.steal_pytorch_weight(fname).reshape(param.data.shape).to(ctype).to(self.device)
 
     def _safe_load_medusa_head_weight_from_module(self, module: torch.nn.Module, ctype: torch.dtype):
         named_parameters = {k: v for k,v in module.named_parameters()}
         for key in named_parameters.keys():
-            named_parameters[key].data = self.weight.steal_pytorch_weight(key).reshape(named_parameters[key].data.shape).to(ctype).to('cuda:0')
+            named_parameters[key].data = self.weight.steal_pytorch_weight(key).reshape(named_parameters[key].data.shape).to(ctype).to(self.device)
 
     def init_prefix_encoder_weight(self):
         #TODO@miji check tp
@@ -282,21 +281,27 @@ class GPT(BaseModel):
                 token_type_weight = self.weight.steal_pytorch_weight(W.token_type_embedding)
                 assert token_type_weight is not None, "token_type embedding weight not found"
                 self.token_type_embeddings.set_weight(token_type_weight.cuda())
-                self.weight.append_global_weight(W.token_type_embedding, self.token_type_embeddings._emb)                
+                self.weight.append_global_weight(W.token_type_embedding, self.token_type_embeddings._emb)
             if self.pre_decoder_layernorm is not None:
                 self._safe_load_from_module(self.pre_decoder_layernorm.weight, W.pre_decoder_ln_gamma)
                 self._safe_load_from_module(self.pre_decoder_layernorm.bias, W.pre_decoder_ln_beta)
                 self.weight.append_global_weight(W.pre_decoder_ln_gamma, self.pre_decoder_layernorm.weight.data)
                 self.weight.append_global_weight(W.pre_decoder_ln_beta, self.pre_decoder_layernorm.bias.data)
+                if self.config.quant_algo.isPerTensorQuant():
+                    static_quant = self.weight.steal_pytorch_weight(W.pre_decoder_ln_static_quant)
+                    static_quant_reciprocal = self.weight.steal_pytorch_weight(W.pre_decoder_ln_static_quant_reciprocal)
+                    assert static_quant is not None and static_quant_reciprocal is not None, "pre decoder static quant should not be None"
+                    self.weight.append_global_weight(W.pre_decoder_ln_static_quant, static_quant)
+                    self.weight.append_global_weight(W.pre_decoder_ln_static_quant_reciprocal, static_quant_reciprocal)
 
         if g_parallel_info.is_pp_last:
             if self.post_decoder_layernorm is not None:
                 self._safe_load_from_module(self.post_decoder_layernorm.weight, W.final_ln_gamma)
                 self._safe_load_from_module(self.post_decoder_layernorm.bias, W.final_ln_beta)
-                self.weight.append_global_weight("final_layernorm.gamma", self.post_decoder_layernorm.weight.data)
-                self.weight.append_global_weight("final_layernorm.beta", self.post_decoder_layernorm.bias.data)
+                self.weight.append_global_weight(W.final_ln_gamma, self.post_decoder_layernorm.weight.data)
+                self.weight.append_global_weight(W.final_ln_beta, self.post_decoder_layernorm.bias.data)
 
-    def _initialize_from_weight(self, device: Optional[Union[str, int, torch.device]] = 'cuda:0'):
+    def _initialize_from_weight(self):
         self.init_word_embedding_weight()
         self.init_lm_head_weight()
         self.init_prefix_encoder_weight()
@@ -318,6 +323,10 @@ class GPT(BaseModel):
         quant_config_path = os.path.join(ckpt_path, 'smoothquant.ini')
         if os.path.exists(quant_config_path):
             config.quant_algo.setQuantAlgo('smooth_quant', 0, 0)
+        per_tensor_config_path = os.path.join(ckpt_path, "pertensorquant.ini")
+
+        if os.path.exists(per_tensor_config_path):
+            config.quant_algo.setQuantAlgo('pertensor_quant', 0, 0)
 
         quant_config = config_json.get("quantization_config", None)
         if quant_config is not None:

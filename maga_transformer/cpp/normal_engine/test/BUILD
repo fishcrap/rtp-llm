@@ -1,4 +1,5 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 
 test_copts = [
     "-fno-access-control",
@@ -14,7 +15,18 @@ test_linkopts = [
     "-lcudart",
     "-lnccl",
     "-lnvToolsExt",
-]
+] + select({
+    "//:using_cuda": [
+        "-ltorch_cuda",
+        "-lc10_cuda",
+    ],
+    "//:using_rocm": [
+        "-ltorch_hip",
+        "-lc10_hip",
+    ],
+    "//conditions:default": [
+    ],
+})
 
 cc_library(
     name = "mock_engine",
@@ -27,7 +39,7 @@ cc_library(
     deps =  [
         "//src/fastertransformer/devices/testing:device_test_utils",
         "//src/fastertransformer/devices/cuda_impl:cuda_impl",
-        "//3rdparty/flash_attention2:flash_attention2_impl",
+        "@flash_attention//:flash_attention2_impl",
         "//maga_transformer/cpp:normal_engine",
         "//:gpt_init_params",
         "@com_google_googletest//:gtest",
@@ -50,7 +62,7 @@ cc_test(
     deps = [
         "//src/fastertransformer/devices/testing:device_test_utils",
         "//src/fastertransformer/devices/cuda_impl:cuda_impl",
-        "//3rdparty/flash_attention2:flash_attention2_impl",
+        "@flash_attention//:flash_attention2_impl",
         "//maga_transformer/cpp:normal_engine",
         "//:gpt_init_params",
         "@com_google_googletest//:gtest",

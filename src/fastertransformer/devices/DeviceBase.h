@@ -3,6 +3,7 @@
 #include "src/fastertransformer/devices/DeviceOps.h"
 #include "src/fastertransformer/devices/DeviceData.h"
 #include "src/fastertransformer/devices/BufferManager.h"
+#include "src/fastertransformer/devices/OpData.h"
 
 namespace fastertransformer {
 
@@ -11,6 +12,10 @@ public:
     DeviceBase(const DeviceInitParams& params);
 
     virtual void init();
+    // Init and preRun(NormalEngine::loop()) are executed in two different threads, some environments
+    // needs to be reset again in a new thread(such as cudaSetDevice,
+    // otherwise it will be executed in default cudaDevice 0) so we provide a preRun() to do this.
+    virtual void preRun() {}
     virtual DeviceProperties getDeviceProperties() = 0;
     virtual DeviceStatus getDeviceStatus();
     void traceMemoryUsage();
@@ -20,6 +25,7 @@ public:
                                  const BufferHints& hints = {});
     virtual void syncAndCheck();
     virtual void syncCommunication(bool timeout = true);
+    virtual DevicePrepOutput prepareModelRun(const DevicePrepParams& params);
 
 public:
     // device-independence op implementations
@@ -29,6 +35,8 @@ public:
     AttentionLayerOutput attentionLayer(const AttentionLayerParams& params) override;
     FfnLayerOutput ffnLayer(const FfnLayerParams& params) override;
     LoraLinearOutput loraLinear(const LoraLinearParams& params) override;
+    LossOutput loss(const LossParams& params) override;
+    MaskOutput attentionMask(const MaskParams& params) override;
 
 protected:
     BufferStatus queryBufferStatus();

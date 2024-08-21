@@ -23,7 +23,6 @@
 
 #include "src/fastertransformer/core/Types.h"
 #include "src/fastertransformer/kernels/custom_ar_kernels.h"
-#include "src/fastertransformer/core/Tensor.h"
 #include "src/fastertransformer/cuda/cuda_utils.h"
 #include "src/fastertransformer/cuda/nccl/nccl_utils.h"
 #include "src/fastertransformer/utils/logger.h"
@@ -56,6 +55,10 @@ public:
 
     static bool shouldCustomAR(const std::vector<int>& tp_ranks, int rank);
 
+    void* peer_comm_buffer_ptr() {
+        return param_.peer_comm_buffer_ptrs[rank_];
+    }
+
 private:
     std::vector<cudaIpcMemHandle_t> prepareP2PBuffer_(const NcclParam& nccl_para,
                                                       size_t           local_buffer_size,
@@ -63,12 +66,12 @@ private:
                                                       cudaStream_t     stream);
 
     CustomAllReduceParameters       param_;
-    Tensor*                         output_tensor_ = nullptr;
     const int                       rank_;
     std::vector<int>                tp_ranks_;
     std::vector<cudaIpcMemHandle_t> peer_comm_buffer_handles_;
 };
 
-std::unique_ptr<CustomAllReduceComm> initCustomAllReduceComm(const NcclParam& nccl_para, const std::vector<int>& tp_ranks, cudaStream_t stream);
+std::unique_ptr<CustomAllReduceComm>
+initCustomAllReduceComm(const NcclParam& nccl_para, const std::vector<int>& tp_ranks, cudaStream_t stream);
 
 }  // namespace fastertransformer

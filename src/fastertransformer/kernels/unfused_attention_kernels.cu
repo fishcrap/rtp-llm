@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/fastertransformer/utils/utils.h"
 #include "src/fastertransformer/kernels/kv_cache_utils.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/kernels/rotary_position_embedding.h"
@@ -316,7 +316,7 @@ template<typename T, typename T_IN, int ITEMS_PER_THREAD>
 __global__ void softmax_kernel(T*          attn_score,
                                const T_IN* qk,
                                const T*    attn_mask,
-                               const T*    linear_bias_slopes,
+                               const float* linear_bias_slopes,
                                const int   batch_size,
                                const int   head_num,
                                const int   q_length,
@@ -354,7 +354,7 @@ __global__ void softmax_kernel(T*          attn_score,
                 // We don't handle the upper diagonal (ki > qi) separately, whose values
                 // are negligible due to the negative infinity mask. And it matches with
                 // the HF's implementation.
-                qk_bias += static_cast<float>(linear_bias_slope * (ki - qi));
+                qk_bias -= static_cast<float>(abs(linear_bias_slope * (ki - qi)));
             }
 
             int   mask_offset = (bi * q_length + qi) * k_length + ki;
@@ -395,7 +395,7 @@ template<typename T, int ITEMS_PER_THREAD>
 __global__ void softmax_kernel_h2(T*        attn_score,
                                   const T*  qk_buf,
                                   const T*  attn_mask,
-                                  const T*  linear_bias_slopes,
+                                  const float* linear_bias_slopes,
                                   const int batch_size,
                                   const int head_num,
                                   const int q_length,
@@ -454,7 +454,7 @@ __global__ void softmax_kernel_h2(T*        attn_score,
                 // zero due to slope * (qi - 2*ki+1) = 0. Thus, we don't handle the upper diagonal
                 // separately, whose values are negligible due to the negative infinity mask.
                 T2 dist(2.0f * ki - qi, 2.0f * ki + 1 - qi);
-                qk_bias = hadd2<T2>(qk_bias, hmul2<T2>(linear_bias_slope, dist));
+                qk_bias = hadd2<T2>(qk_bias, -cuda_abs(hmul2<T2>(linear_bias_slope, dist)));
             }
 
             T2 mask_val = ldg(&attn_mask_h2[mask_offset]);
@@ -495,7 +495,7 @@ template<typename T, int K_ITEMS_PER_THREAD, int Q_ITEMS_PER_THREAD>
 __global__ void softmax_kernel_h2_v2(T*        attn_score,
                                      const T*  qk_buf,
                                      const T*  attn_mask,
-                                     const T*  linear_bias_slopes,
+                                     const float* linear_bias_slopes,
                                      const int batch_size,
                                      const int head_num,
                                      const int q_length,
@@ -579,7 +579,7 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
                     // separately, whose values are negligible due to the negative infinity mask.
                     int qidx = qi + j * gridDim.x;
                     T2  dist(2.0f * ki - qidx, 2.0f * ki + 1 - qidx);
-                    pos_bias[j] = hmul2<T2>(linear_bias_slope, dist);
+                    pos_bias[j] = -cuda_abs(hmul2<T2>(linear_bias_slope, dist));
                 }
             }
 #pragma unroll
@@ -672,7 +672,7 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
                 <<<grid, block, 0, stream>>>((T_*)param.attention_score,                                               \
                                              (const T_*)param.qk,                                                      \
                                              (const T_*)param.attention_mask,                                          \
-                                             (const T_*)param.linear_bias_slopes,                                      \
+                                             (const float*)param.linear_bias_slopes,                                      \
                                              param.batch_size,                                                         \
                                              param.num_heads,                                                          \
                                              param.q_length,                                                           \
@@ -683,7 +683,7 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
             softmax_kernel_h2<T_, ITEMS_PER_THREAD><<<grid, block, 0, stream>>>((T_*)param.attention_score,            \
                                                                                 (const T_*)param.qk,                   \
                                                                                 (const T_*)param.attention_mask,       \
-                                                                                (const T_*)param.linear_bias_slopes,   \
+                                                                                (const float*)param.linear_bias_slopes,   \
                                                                                 param.batch_size,                      \
                                                                                 param.num_heads,                       \
                                                                                 param.q_length,                        \
@@ -1463,7 +1463,7 @@ struct Vec_t<__nv_bfloat16> {
 };
 #endif
 
-template<typename T, typename Tcache, bool PREFIX_PROMPT, bool USE_PAGED_FMHA>
+template<typename T, typename Tcache, bool PREFIX_PROMPT, bool USE_PAGED_FMHA, RopeStyle ROPE_STYLE>
 __global__ void add_fusedQKV_bias_transpose_kernel(T*                               q_buf,
                                                    T*                               k_buf,
                                                    T*                               v_buf,
@@ -1478,15 +1478,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                                                    const int   head_num,
                                                    const int   head_num_kv,
                                                    const int   size_per_head,
-                                                   const int   rotary_embedding_dim,
-                                                   const int   rotary_embedding_style,
-                                                   const float rotary_embedding_base,
-                                                   const int   logn_seq_len,
-                                                   const bool  use_logn_attn,
-                                                   const float rotary_embedding_scale  = 0.0f,
-                                                   const int   dynamic_embedding_max_pos = 0,
-                                                   const int   base_scale                = 1,
-                                                   const int   org_embedding_max_pos     = 0)
+                                                   RopeConfig  rope_config,
+                                                   const bool  use_logn_attn)
 {
     // This kernel add bias to QKV, which has shape [batch_size, seq_len, 3, head_num, size_per_head], and
     // QKV split to 3 split buffer q, k, v and transpose them to [batch_size, head_num, seq_len, size_per_head].
@@ -1515,7 +1508,6 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int     head_idx      = blockIdx.y;
     const int     tidx          = threadIdx.x;
     const int     total_seq_len = param.max_prefix_prompt_length + seq_len;
-    constexpr int X_ELEMS       = (sizeof(T) == 4) ? 4 : 8;
 
     const bool is_masked = tidx * vec_size >= size_per_head;
     // NOTE: blockIdx.x < batch_size * param.max_prefix_prompt_length really handles prefix prompts
@@ -1529,10 +1521,6 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                 const int dest_kv_idx = prompt_batch_idx * size_per_head * total_seq_len * head_num_kv
                                         + head_idx * size_per_head * total_seq_len + prompt_seq_idx * size_per_head
                                         + tidx * vec_size;
-                const T* prefix_prompt_k = nullptr;
-                const T* prefix_prompt_v = nullptr;
-                int      prefix_k_idx    = 0;
-                int      prefix_v_idx    = 0;
                 if (param.kv_block_array.mMaxSeqs > 0) {
                     if (!is_masked) {
                         Tcache* k_cache = reinterpret_cast<Tcache*>(param.kv_block_array.getKBlockPtr(prompt_batch_idx, prompt_seq_idx));
@@ -1598,31 +1586,25 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
         }
     }
 
-    const int position_id = position_ids == nullptr ? -1 : position_ids[token_idx];    
+    const int position_id = position_ids == nullptr ? -1 : position_ids[token_idx];
     const int pre_len = cu_seqlens[batch_idx];
     const int input_len = cu_seqlens[batch_idx + 1] - pre_len;
-    context_rope(rotary_embedding_style,
-                q,
-                k,
-                reinterpret_cast<T*>(smem_),
-                tidx,
-                seq_idx,
-                position_id,
-                rotary_embedding_dim,
-                seq_len,
-                rotary_embedding_base,
-                rotary_embedding_scale,
-                dynamic_embedding_max_pos,
-                org_embedding_max_pos,
-                base_scale,
-                input_len,
-                PREFIX_PROMPT,
-                prefix_prompt_length,
-                param.count_length,
-                logn_seq_len);
+    context_rope<T, Vec_t, ROPE_STYLE>(
+            rope_config,
+            q,
+            k,
+            reinterpret_cast<T*>(smem_),
+            tidx,
+            seq_idx,
+            position_id,
+            seq_len,
+            input_len,
+            PREFIX_PROMPT,
+            prefix_prompt_length,
+            param.count_length);
 
     if (use_logn_attn && !is_masked) {
-        logn_attention(q, seq_idx, logn_seq_len);
+        logn_attention(q, seq_idx, rope_config.max_pos);
     }
 
     if (!is_masked) {
@@ -1653,32 +1635,6 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     }
 }
 
-#define FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(Tcache, PREFIX_PROMPT, USE_PAGED_FMHA)                                         \
-    add_fusedQKV_bias_transpose_kernel<T, Tcache, PREFIX_PROMPT, USE_PAGED_FMHA>                                       \
-        <<<grid, block, smem_size, stream>>>(q_buf,                                                                    \
-                                             k_buf,                                                                    \
-                                             v_buf,                                                                    \
-                                             param,                                                                    \
-                                             QKV,                                                                      \
-                                             position_ids,                                                             \
-                                             qkv_bias,                                                                 \
-                                             padding_offset,                                                           \
-                                             cu_seqlens,                                                               \
-                                             batch_size,                                                               \
-                                             seq_len,                                                                  \
-                                             head_num,                                                                 \
-                                             head_num_kv,                                                              \
-                                             size_per_head,                                                            \
-                                             rotary_embedding_dim,                                                     \
-                                             rotary_embedding_style,                                                   \
-                                             rotary_embedding_base,                                                    \
-                                             logn_seq_len,                                                             \
-                                             use_logn_attn,                                                            \
-                                             rotary_embedding_scale,                                                   \
-                                             dynamic_embedding_max_pos,                                                \
-                                             base_scale,                                                               \
-                                             org_embedding_max_pos);
-
 template<typename T>
 void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     T*                               k_buf,
@@ -1695,14 +1651,7 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        head_num,
                                     const int                        head_num_kv,
                                     const int                        size_per_head,
-                                    const int                        rotary_embedding_dim,
-                                    const int                        rotary_embedding_style,
-                                    const float                      rotary_embedding_base,
-                                    const float                      rotary_embedding_scale,
-                                    const int                        dynamic_embedding_max_pos,
-                                    const int                        org_embedding_max_pos,
-                                    const int                        base_scale,
-                                    const int                        logn_seq_len,
+                                    const RopeConfig                 rope_config,
                                     const bool                       use_logn_attn,
                                     const float*                     scale,
                                     const int                        int8_mode,
@@ -1711,46 +1660,36 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
 {
     auto &param = *param_ptr;
     dim3 block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
-    // dim3   grid(token_num + batch_size * param.max_prefix_prompt_length, head_num);
-    dim3   grid(token_num + batch_size * param.max_prefix_prompt_length, head_num);
-    size_t smem_size = rotary_embedding_style == 0 ? 0 : 2 * rotary_embedding_dim * sizeof(T);
+    dim3 grid(token_num + batch_size * param.max_prefix_prompt_length, head_num);
+    size_t smem_size = rope_config.style == RopeStyle::No ? 0 : 2 * rope_config.dim * sizeof(T);
 
-    // [bs, seq_len, 3, head, Dh]
-    FT_CHECK_WITH_INFO(int8_mode != 2, "w8a8 not yet implemented");  // TODO(mseznec)
-    // smem_size        = rotary_embedding_style == 1 ? smem_size : 2 * smem_size;
-    // NOTE: add offset for rotary embedding
-    if (param.max_prefix_prompt_length == 0) {
-        if (param.kv_block_array.int8_mode) {
-            if (use_paged_fmha) {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(int8_t, false, true);
-            } else {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(int8_t, false, false);
-            }
-        } else {
-            if (use_paged_fmha) {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, false, true);
-            } else {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, false, false);
-            }
-        }
-    } else {
-        if (param.kv_block_array.int8_mode) {
-            if (use_paged_fmha) {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(int8_t, true, true);
-            } else {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(int8_t, true, false);
-            }
-        } else {
-            if (use_paged_fmha) {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, true, true);
-            } else {
-                FUSED_QKV_BIAS_TRANSPOSE_LAUNCH(T, true, false);
-            }
-        }
-    }
+    FT_SWITCH(param.max_prefix_prompt_length != 0, PREFIX_PROMPT, [&]{
+        FT_SWITCH(use_paged_fmha, USE_PAGED_FMHA, [&]{
+            FT_SWITCH_T(param.kv_block_array.int8_mode, Tcache, int8_t, T, [&]{
+                FT_ROPE_SWITCH(rope_config.style, ROPE_STYLE, [&]{
+                    add_fusedQKV_bias_transpose_kernel<T, Tcache, PREFIX_PROMPT, USE_PAGED_FMHA, ROPE_STYLE>
+                        <<<grid, block, smem_size, stream>>>(
+                                q_buf,
+                                k_buf,
+                                v_buf,
+                                param,
+                                QKV,
+                                position_ids,
+                                qkv_bias,
+                                padding_offset,
+                                cu_seqlens,
+                                batch_size,
+                                seq_len,
+                                head_num,
+                                head_num_kv,
+                                size_per_head,
+                                rope_config,
+                                use_logn_attn);
+                });
+            });
+        });
+    });
 }
-
-#undef FUSED_QKV_BIAS_TRANSPOSE_LAUNCH
 
 template<typename T>
 __global__ void SplitQKV_kernel(T*        q_buf,
@@ -1840,14 +1779,7 @@ INSTANTIATESPLITQKV(__nv_bfloat16);
                                                  const int                        head_num,                            \
                                                  const int                        head_num_kv,                         \
                                                  const int                        size_per_head,                       \
-                                                 const int                        rotary_embedding_dim,                \
-                                                 const int                        rotary_embedding_style,              \
-                                                 const float                      rotary_embedding_base,               \
-                                                 const float                      rotary_embedding_scale,              \
-                                                 const int                        dynamic_embedding_max_pos,           \
-                                                 const int                        org_embedding_max_pos,               \
-                                                 const int                        base_scale,                          \
-                                                 const int                        logn_seq_len,                        \
+                                                 const RopeConfig                 rope_config,                         \
                                                  const bool                       use_logn_attn,                       \
                                                  const float*                     scale,                               \
                                                  const int                        int8_mode,                           \

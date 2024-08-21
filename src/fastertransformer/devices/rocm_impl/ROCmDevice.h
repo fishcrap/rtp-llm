@@ -10,10 +10,15 @@
 #include <hip/hip_bf16.h>
 #endif
 
+#include "src/fastertransformer/cuda/custom_ar/custom_ar_comm.h"
+#include "src/fastertransformer/cuda/nccl/nccl_utils.h"
+
 #include "src/fastertransformer/devices/DeviceBase.h"
 #include "src/fastertransformer/rocm/hip_utils.h"
 #include "src/fastertransformer/rocm/hipblasMMWrapper.h"
 #include "src/fastertransformer/rocm/rocmFmhaWrapper.h"
+#include "src/fastertransformer/rocm/quantizePreprocessors.h"
+#include "src/fastertransformer/rocm/rocmMoeWrapper.h"
 
 namespace fastertransformer {
 
@@ -36,9 +41,19 @@ public:
     void activation(const ActivationParams& params) override;
     AttentionModuleOutput contextAttention(const AttentionModuleParams& params) override;
     AttentionModuleOutput decoderSelfAttention(const AttentionModuleParams& params) override;
+    FfnLayerOutput moeFfnLayer(const FfnLayerParams& params);
     BufferPtr softmax(const SoftmaxParams& params) override;
     void sampleGreedy(const GreedyParams& params);
     DeviceStatus getDeviceStatus() override;
+    
+    void syncCommunication(bool timeout = true) override;
+    void broadcast(const BroadcastParams& params);
+    AllReduceOutput allReduce(const AllReduceParams& params);
+    void allGather(const AllGatherParams& params);
+
+    BufferPtr quantize(const QuantizeParams& params) override;
+    BufferPtr dequantize(const QuantizeParams& params);
+    void      printBuffer(const BufferPtr buffer);
 
 public:
     BufferPtr        testVecAdd(const BufferPtr a, const BufferPtr b);
@@ -70,6 +85,12 @@ private:
     // fmha
     std::unique_ptr<rocmFmhaWrapper>      fmha_runner_;
     bool use_openSource_fmha    = true;
+
+    NcclParam nccl_param_;
+    std::unique_ptr<CustomAllReduceComm> custom_allreduce_comm_ = nullptr; // for custom allreduce use
+
+    //moe
+    std::unique_ptr<rocmMoeWrapper> moe_runner_;
 };
 
 }  // namespace fastertransformer

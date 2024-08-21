@@ -1,9 +1,10 @@
 #pragma once
 
 #include "src/fastertransformer/devices/Weights.h"
+#include "src/fastertransformer/devices/LoraWeights.h"
 #include "src/fastertransformer/devices/CommonDefines.h"
 #include "src/fastertransformer/utils/activation_types.h"
-#include "src/fastertransformer/utils/RopeTypes.h"
+#include "src/fastertransformer/utils/RopeConfig.h"
 
 #include "src/fastertransformer/core/Buffer.h"
 #include "src/fastertransformer/core/QBuffer.h"
@@ -15,6 +16,7 @@
 #include <functional>
 #include <sstream>
 #include <memory>
+#include <torch/python.h>
 
 namespace fastertransformer {
 
@@ -69,11 +71,12 @@ private:
 
 using OptionalConstBufferRef    = std::optional<std::reference_wrapper<const Buffer>>;
 using OptionalBufferRef         = std::optional<std::reference_wrapper<Buffer>>;
-
-using OptionalConstLoraMapRef    = std::optional<std::reference_wrapper<const LoraWeightsMap>>;
+using OptionalConstVecBufferPtrRef = std::optional<std::reference_wrapper<const std::vector<BufferPtr>>>;
 
 
 using CloneOutput = BufferPtr;
+
+
 
 struct CloneParams {
     CloneParams(const Buffer& input,
@@ -129,6 +132,10 @@ struct LayernormOutput {
     BufferPtr before_norm_output;
 };
 
+struct AddBiasOutput {
+    BufferPtr output;
+};
+
 struct LayernormParams {
     LayernormParams(BufferPtr input,
                     BufferPtr before_norm_output,
@@ -148,13 +155,37 @@ struct LayernormParams {
                     residual1(residual1),
                     residual2(residual2),
                     bias(bias),
+                    norm_type(norm_type),
                     alpha(alpha),
                     eps(eps),
                     return_normed_output(return_normed_output),
                     is_inplace(is_inplace),
-                    norm_type(norm_type),
-                    qscheme(qscheme) {};
+                    qscheme(qscheme),
+                    offset(0),
+                    stride(0) {};
 
+    // for qk norm
+    LayernormParams(BufferPtr input,
+                    const std::optional<std::reference_wrapper<const LayerNormWeights>> norm_weight,
+                    double eps,
+                    NormType norm_type,
+                    size_t offset,
+                    size_t stride
+                ):
+                    input(std::move(input)),
+                    before_norm_output(nullptr),
+                    norm_weight(norm_weight),
+                    residual1(std::nullopt),
+                    residual2(std::nullopt),
+                    bias(std::nullopt),
+                    norm_type(norm_type),
+                    alpha(0.0),
+                    eps(eps),
+                    return_normed_output(false),
+                    is_inplace(true),
+                    qscheme(QScheme::NoQuantize),
+                    offset(offset),
+                    stride(stride) {};
 
 
     BufferPtr input;
@@ -171,9 +202,12 @@ struct LayernormParams {
     const double alpha;
     const double eps;
 
-    const bool is_inplace;
     const bool return_normed_output;
+    const bool is_inplace;
     const QScheme qscheme;
+
+    const int offset;
+    const int stride;
 };
 
 enum GemmType : size_t {
@@ -185,6 +219,12 @@ enum GemmType : size_t {
     QBufferA_BufferB_BufferC_2DGemm,
     BufferA_QBufferB_BufferC_2DGemm,
     QBufferA_QBufferB_BufferC_2DGemm,
+};
+
+struct AddBiasParams {
+    BufferPtr     input;
+    const Buffer& bias;
+    bool          inplace;
 };
 
 // D = alpha * op(A) * op(B) + beta * C
@@ -257,19 +297,14 @@ struct EmbeddingLookupParams {
     const Buffer& embedding_table;
     double input_embedding_scalar = 1;
 
+    OptionalConstBufferRef text_tokens_mask;
+
     OptionalConstBufferRef position_ids;
     OptionalConstBufferRef position_table;
 
     OptionalConstBufferRef token_types;
     OptionalConstBufferRef token_type_table;
 };
-
-struct LoraInput {
-    BufferPtr lora_ids;
-    BufferPtr lora_input_lengths;
-};
-
-using OptionalLoraInput = std::optional<LoraInput>;
 
 struct KvCacheInfo {
     BufferPtr kv_cache_offset;  // [batch_size, block_nums], kv cache block offset
@@ -279,6 +314,13 @@ struct KvCacheInfo {
     BufferPtr v_scale_buffer;   // [layer_num, block_nums, head, seq_size_per_block]
 };
 
+struct MultimodalEmbeddingParams {
+    const BufferPtr& word_embeddings;
+    OptionalConstVecBufferPtrRef multimodal_features;
+    OptionalConstBufferRef multimodal_locs;
+};
+
+
 struct AttentionCommonInputs {
     // see detailed comments at GptModelInputs
     const Buffer& input_lengths;      // int32_t, [decoder_batch_size + context_batch_size]
@@ -286,6 +328,7 @@ struct AttentionCommonInputs {
 
     std::optional<KvCacheInfo> kv_cache;
     ConstBufferPtr cu_seqlens;
+    ConstBufferPtr cu_kv_seqlens;
     ConstBufferPtr padding_offset;
 
     size_t context_batch_size;
@@ -296,11 +339,11 @@ struct AttentionCommonInputs {
 
     BufferPtr position_ids;
     BufferPtr attention_mask;
-    BufferPtr linear_bias_slopes;
+    ConstBufferPtr linear_bias_slopes;
     BufferPtr prefix_prompt_lengths;
     int32_t   max_prefix_length;
 
-    OptionalLoraInput lora_input = std::nullopt;
+    lora::AttentionLayerLoraInput lora_input;
 };
 
 struct AttentionConfigs {
@@ -316,6 +359,8 @@ struct AttentionConfigs {
 
     AttentionMaskType mask_type = noMask;
     float q_scaling = 1.0f;
+    bool fuse_qkv_add_bias = true;
+    bool use_logn_attn = false;
 };
 
 using AttentionModuleOutput = void;
@@ -334,6 +379,11 @@ struct AttentionLayerOutput {
     BufferPtr hidden_states;
 };
 
+struct LayerNormConfig {
+    double eps;
+    NormType norm_type;
+};
+
 struct AttentionLayerParams {
     const Buffer&                   input;
     BufferPtr                       output;
@@ -341,6 +391,8 @@ struct AttentionLayerParams {
     const AttentionLayerWeights&    weights;
     AttentionCommonInputs&          common;
     const OptionalConstBufferRef    residual; // for intel xft
+    const LayerNormConfig           ln_params;
+    const QScheme                   qscheme;
 };
 
 struct MoeConfigs {
@@ -362,26 +414,24 @@ struct FfnLayerOutput {
 };
 
 struct FfnLayerParams {
-    FfnLayerParams(const Buffer& input,
-                   const FfnConfigs& configs,
-                   const FfnLayerWeights& weights,
+    FfnLayerParams(const Buffer&                input,
+                   const FfnConfigs&            configs,
+                   const FfnLayerWeights&       weights,
                    const OptionalConstBufferRef residual = std::nullopt,
-                   const OptionalLoraInput lora_input = std::nullopt) :
-    input(input),
-    configs(configs),
-    weights(weights),
-    residual(residual),
-    lora_input(lora_input)
-    {}
+                   const QScheme                qscheme  = QScheme::NoQuantize,
+                   BufferPtr                    output = nullptr):
+        input(input), configs(configs), weights(weights), residual(residual), qscheme(qscheme), output(std::move(output)){}
 
     const Buffer& input;
-
     const FfnConfigs&            configs;
     const FfnLayerWeights&       weights;
 
     const OptionalConstBufferRef residual; // for intel xft
 
-    const OptionalLoraInput lora_input;
+    const QScheme qscheme;
+    BufferPtr                    output;
+
+    lora::FfnLayerLoraInput lora_input;
 };
 
 struct GreedyParams {
@@ -435,9 +485,23 @@ enum class ReduceOp {
     Avg = 4,
 };
 
+
+struct PrepareAllReduceParams {
+    const BufferPtr buffer;
+    const ReduceOp op;
+};
+
+struct PrepareAllReduceOutput {
+    const BufferPtr buffer;
+};
+
 struct AllReduceParams {
     const BufferPtr buffer;
     const ReduceOp op;
+};
+
+struct AllReduceOutput {
+    const BufferPtr buffer;
 };
 
 struct AllGatherParams {
@@ -456,12 +520,46 @@ struct ActivationParams {
 };
 
 // softmax op is inplace-update, thus output buffer is same as input
-struct SoftmaxParams{
+struct SoftmaxParams {
     const BufferPtr input;
     const OptionalConstBufferRef mask = std::nullopt;
     const OptionalConstBufferRef bias = std::nullopt;
     float scale = 1.0f;
     const DataType output_t = DataType::TYPE_INVALID;
+    const OptionalConstBufferRef linear_bias_slopes = std::nullopt;
+};
+
+struct LossParams {
+    const Buffer& logits;
+    const Buffer& labels;
+    int calculate_loss = 0;
+};
+
+using LossOutput = BufferPtr;
+
+struct MaskParams {
+public:
+    const Buffer& input_lengths;
+    const Buffer& prefix_lengths;
+    DataType      dtype;
+    bool          is_causal;
+};
+
+using MaskOutput = BufferPtr;
+
+struct DevicePrepParams {
+    const AttentionConfigs& configs;
+    DataType dtype;
+    size_t context_batch_size;
+    bool has_kv_cache     = true;
+    bool diff_qkv_len     = false;
+    bool int8_kv_cache    = false;
+    bool has_alibi_slopes = false;
+    bool sprase_head      = false;
+};
+
+struct DevicePrepOutput {
+    bool need_mask = true;
 };
 
 struct LoraLinearOutput {
@@ -470,48 +568,61 @@ struct LoraLinearOutput {
 
 struct LoraLinearParams {
 
-    LoraLinearParams(GemmParams&                gemm_params,
-                     OptionalConstLoraMapRef    lora_map = std::nullopt,
-                     OptionalLoraInput          lora_input = std::nullopt) :
+    LoraLinearParams(GemmParams& gemm_params,
+                     lora::LoraOpInputPtr lora_input = nullptr) :
                      gemm_params(gemm_params),
-                     lora_map(lora_map),
                      lora_input(lora_input) {}
 
-    GemmParams&                             gemm_params;
-    OptionalConstLoraMapRef                 lora_map;
-    OptionalLoraInput                  lora_input;
+    GemmParams& gemm_params;
+    lora::LoraOpInputPtr lora_input;
 };
 
 struct QuantizeParams {
     const Buffer&           input;
     DataType                qtype;
     size_t                  axis;
-    OptionalConstBufferRef  scales;
-    OptionalConstBufferRef  zeros;
-
+    QScheme                 qscheme;
 
     // for soomth quantize
     OptionalConstBufferRef  smoother;
     OptionalConstBufferRef  shift;
 
-    QuantizeParams(const Buffer& input,
-                   DataType qtype,
-                   size_t axis) :
-                   input(input),
-                   qtype(qtype),
-                   axis(axis) {}
+    // for static quantize
+    OptionalConstBufferRef  static_scale;
+    OptionalConstBufferRef  static_scale_reciprocal;
 
-    QuantizeParams(const Buffer& input,
+    // for groupwise quantize
+    int64_t    groupSize;
+
+    QuantizeParams(const Buffer&          input,
+                   DataType               qtype,
+                   size_t                 axis,
+                   QScheme                qscheme,
                    OptionalConstBufferRef smoother,
                    OptionalConstBufferRef shift,
-                   DataType qtype,
-                   size_t axis) :
-                   input(input),
-                   qtype(qtype),
-                   axis(axis),
-                   smoother(smoother),
-                   shift(shift) {}
-
+                   OptionalConstBufferRef static_scale,
+                   OptionalConstBufferRef static_scale_reciprocal):
+        input(input),
+        qtype(qtype),
+        axis(axis),
+        qscheme(qscheme),
+        smoother(smoother),
+        shift(shift),
+        static_scale(static_scale),
+        static_scale_reciprocal(static_scale_reciprocal),
+        groupSize(64) {}
+    QuantizeParams(const Buffer& input, DataType qtype, size_t axis):
+        input(input),
+        qtype(qtype),
+        axis(axis),
+        qscheme(QScheme::Qint8PerToken),
+        groupSize(64) {}
+    QuantizeParams(const Buffer& input, DataType qtype, size_t axis, int64_t groupSize):
+        input(input),
+        qtype(qtype),
+        axis(axis),
+        qscheme(QScheme::Qint8PerToken),
+        groupSize(groupSize) {}
 };
 
 }  // namespace fastertransformer

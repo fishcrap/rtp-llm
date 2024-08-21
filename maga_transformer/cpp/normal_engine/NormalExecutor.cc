@@ -12,39 +12,26 @@ using namespace std;
 
 namespace rtp_llm {
 
-NormalExecutor::NormalExecutor(const EngineInitParams& params, const std::shared_ptr<CacheManager>& cache_manager, ft::DeviceBase* device):
+NormalExecutor::NormalExecutor(const EngineInitParams& params,
+                               const std::shared_ptr<CacheManager>& cache_manager,
+                               ft::DeviceBase* device,
+                               const std::shared_ptr<lora::LoraManager>& lora_manager = nullptr):
     Executor(device),
     cache_manager_(cache_manager),
+    lora_manager_(lora_manager),
     metrics_reporter_(params.metrics_reporter),
     tps_reporter_(MetricsLoopReporter<RtpLLMTokenPSMetrics, RtpLLMTokenPSMetricsCollector>(metrics_reporter_)),
     dtype_(ft::getDataType(params.gpt_init_parameter.data_type_)),
     is_causal_(params.gpt_init_parameter.is_causal_)
 {
-    size_t max_batch_size =
-        params.gpt_init_parameter.max_context_batch_size_ + params.gpt_init_parameter.max_generate_batch_size_;
     int eos_id = params.gpt_init_parameter.special_tokens_.eos_token_id_;
     SamplerInitParams sampler_params{device_, eos_id, 1024}; // set static max batch size to avoid sampler reset memory
     sampler_.reset(new Sampler(sampler_params));
 
     model_.reset(new GptModel({device_, params.gpt_weights, genModelDescription(params.gpt_init_parameter)}));
     batch_stream_processor_.reset(new NormalBatchStreamProcessor(params.gpt_init_parameter));
-    need_attention_mask_ = device_->getDeviceProperties().attention_need_mask;
 }
 
-
-absl::Status
-NormalExecutor::addLoRA(const int64_t                                                           lora_id,
-                        const std::vector<std::unordered_map<std::string, ft::ConstBufferPtr>>& lora_a_weights,
-                        const std::vector<std::unordered_map<std::string, ft::ConstBufferPtr>>& lora_b_weights)
-{
-    model_->addLoRA(lora_id, lora_a_weights, lora_b_weights);
-    return absl::OkStatus();
-}
-
-absl::Status NormalExecutor::removeLoRA(const int64_t lora_id) {
-    model_->removeLoRA(lora_id);
-    return absl::OkStatus();
-}
 
 absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams) {
     StreamGroups stream_groups(streams);
@@ -53,19 +40,16 @@ absl::Status NormalExecutor::process(const std::list<GenerateStreamPtr>& streams
     RETURN_IF_STATUS_OR_ERROR(model_input_status);
     auto& model_input = model_input_status.value();
     tpSyncModelInputs(model_input, device_);
+    // get lora input
+    if (lora_manager_ != nullptr) {
+        model_input.lora_model_input = lora_manager_->makeLoraModelInput(model_input.lora_ids,
+                                                                         model_input.lora_input_lengths);
+    }
     auto kv_cache_buffer = cache_manager_->kvCacheBuffer();
     model_input.k_cache_buffer = kv_cache_buffer.k_blocks;
     model_input.v_cache_buffer = kv_cache_buffer.v_blocks;
     model_input.k_scale_buffer = kv_cache_buffer.k_scale;
     model_input.v_scale_buffer = kv_cache_buffer.v_scale;
-    if (need_attention_mask_ && model_input.input_lengths->size() > model_input.sequence_lengths->size()) {
-        const auto generate_batch_size = model_input.sequence_lengths->size();
-        const auto context_batch_size = model_input.input_lengths->size() - generate_batch_size;
-        model_input.attention_mask = NormalBatchStreamProcessor::createAttentionMask({
-                model_input.input_lengths->view(generate_batch_size, context_batch_size),
-                model_input.prefix_lengths->view(generate_batch_size, context_batch_size),
-                dtype_, is_causal_, device_});
-    }
     FT_LOG_DEBUG("model_input: %s", model_input.debugString().c_str());
     auto            merged_output = std::make_unique<MergedOutput>();
     GptModelOutputs model_output;

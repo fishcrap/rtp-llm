@@ -5,7 +5,6 @@ namespace fastertransformer {
 BufferPtr ArmCpuDevice::embeddingLookup(const EmbeddingLookupParams& params) {
     const auto& tokens          = params.combo_tokens;
     const auto& embedding_table = params.embedding_table;
-    const auto& position_ids    = params.position_ids;
     const auto& position_table  = params.position_table;
 
     const auto token_num      = tokens.size();

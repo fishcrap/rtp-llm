@@ -42,7 +42,7 @@ requirement([
     "onnx",
     "sentence-transformers",
     "orjson",
-    "xfastertransformer_devel_icx",
+    "xfastertransformer_devel",
     "decord",
     # add qwen agent package
     "pydantic",
@@ -51,7 +51,8 @@ requirement([
     "jieba",
     "openai",
     "oss2",
-    "pyOpenSSL"
+    "pyOpenSSL",
+    "nest_asyncio"
 ])
 
 if_cuda(
@@ -77,7 +78,6 @@ py_library(
     data = [":cutlass_config"],
     deps = [
         ":torch",
-        ":torchvision",
         "decord",
         ":lru-dict",
         ":cpm_kernels",
@@ -104,7 +104,6 @@ py_library(
     ]),
     deps = [
         ":torch",
-        ":torchvision",
         ":utils",
     ],
 )
@@ -113,6 +112,13 @@ py_library(
     name = "pipeline",
     srcs = glob([
         "pipeline/**/*.py",
+    ]),
+)
+
+py_library(
+    name = "device",
+    srcs = glob([
+        "device/**/*.py",
     ]),
 )
 
@@ -139,8 +145,9 @@ py_library(
         ":ops",
         ":timm",
         ":onnx",
-        ":xfastertransformer_devel_icx",
+        ":xfastertransformer_devel",
         ":decord",
+        ":nest_asyncio"
     ] + if_cuda([
         ":tensorrt",
         ":tensorrt-cu12",
@@ -270,6 +277,7 @@ py_library(
         ":ops",
         ":pipeline",
         ":models",
+        ":device",
         ":config",
         ":structure",
         "//maga_transformer/server:server",
@@ -278,7 +286,6 @@ py_library(
         ":openai_api",
         ":embedding",
         ":sdk",
-        "//maga_transformer/tools:save_ft_module",
         "//maga_transformer/tools:model_assistant",
         "//maga_transformer/distribute:distribute",
         ":tokenizer",
@@ -342,13 +349,14 @@ py_wheel(
         "timm==0.9.12",
         "sentence-transformers==2.7.0",
         "grpcio==1.62.0",
-        "xfastertransformer_devel_icx==1.7.2",
+        "xfastertransformer_devel==1.8.1.1",
         "decord==0.6.0",
         "oss2",
         "json5",
         "dashscope>=1.11.0",
         "jieba",
         "openai",
+        "nest_asyncio",
     ] + whl_deps(),
 )
 
@@ -391,10 +399,11 @@ py_wheel(
         "pydantic==2.5.3",
         "sentence-transformers==2.7.0",
         "grpcio==1.62.0",
-        "xfastertransformer_devel_icx==1.7.2",
+        "xfastertransformer_devel==1.8.1.1",
         "decord==0.6.0",
         "timm==0.9.12",
         "kserve",
+        "nest_asyncio",
     ] + whl_deps(),
 )
 

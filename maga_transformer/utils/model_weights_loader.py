@@ -114,8 +114,8 @@ class ModelWeightsLoader:
                 set(self._database.get_lora_tensor_names(lora_name)))
             self._lora_log.dump()
 
-    def load_weights_from_scratch(self, device: str='cuda:0', num_process=1):
-        weights = ModelWeights(self._num_layers)
+    def load_weights_from_scratch(self, device: str, num_process=1):
+        weights = ModelWeights(self._num_layers, device, self._data_type)
         if num_process > 1:
             ctx = multiprocessing.get_context('spawn')
             with ctx.Pool(num_process) as pool:
@@ -136,7 +136,7 @@ class ModelWeightsLoader:
         for weight in self._model_weights_info.weights:
             tensor = self._load_and_convert_tensor(weight, datatype=self._data_type)
             tensor = self._split_and_sanitize_tensor(tensor, weight)
-            tensor = tensor.to('cpu')
+            tensor = tensor.to(device)
             weights.append_pytorch_weight(weight.name, tensor)
 
         for name, tensor in self._load_medusa_weights(self._model_weights_info.medusa_weights):
@@ -144,7 +144,7 @@ class ModelWeightsLoader:
 
         return weights
 
-    def _load_medusa_weights(self, medusa_weights: List[WeightInfo], device: str='cuda:0') -> List[Tuple[str, torch.Tensor]]:
+    def _load_medusa_weights(self, medusa_weights: List[WeightInfo]) -> List[Tuple[str, torch.Tensor]]:
         if len(medusa_weights) == 0:
             return []
         results: List[Tuple[str, torch.Tensor]] = []
@@ -154,7 +154,7 @@ class ModelWeightsLoader:
             results.append((name, self.load_tensor(name)[0]))
         return results
 
-    def load_lora_weights_from_scratch(self, lora_name: str, device: str='cuda:0', num_process=1):
+    def load_lora_weights_from_scratch(self, lora_name: str, device: str, num_process=1):
         lora_weights = LoRAWeights(self._num_layers)
         # set lora rank
         lora_config = self._database.get_lora_config(lora_name)
@@ -174,7 +174,7 @@ class ModelWeightsLoader:
         return lora_weights
 
 
-    def _load_lora_layer_weight(self, layer_id: int, lora_name: str, device: str = "cuda:0"):
+    def _load_lora_layer_weight(self, layer_id: int, lora_name: str, device: str):
         use_fp32 = os.environ.get("USE_FLOAT32", None) is not None
         results = []
         layer_weights = self._model_weights_info.lora_weights
@@ -291,6 +291,8 @@ class ModelWeightsLoader:
         load_weight(W.sq_quant_scales, torch.float32)
         if self._weights_info._quant_algo.isOmniQuant():
             load_weight(W.sq_quant_shifts, torch.float32)
+        if self._weights_info._quant_algo.isPerTensorQuant():            
+            load_weight(W.static_quant_scales, torch.float32)
         return results
 
     def _load_layer_weight_and_apply_int8(self, layer_weights, layer_id: int, device: str):
@@ -359,7 +361,7 @@ class ModelWeightsLoader:
             return w.name in W.groupwise_quant_params or w.name in W.quant_w
         return False
 
-    def _load_layer_weight(self, layer_id: int, device: str = "cuda:0"):
+    def _load_layer_weight(self, layer_id: int, device: str):
         use_fp32 = os.environ.get("USE_FLOAT32", None) is not None
         results = []
         if isinstance(self._model_weights_info.layer_weights[0], List):
@@ -389,7 +391,7 @@ class ModelWeightsLoader:
         quant_algo = self._weights_info._quant_algo
         if quant_algo.isGroupwise():
             results.extend(self._load_groupwise_layer_weight(layer_weights, layer_id=layer_id, device=device))
-        elif quant_algo.isSmoothQuant() or quant_algo.isOmniQuant():
+        elif quant_algo.isSmoothQuant() or quant_algo.isOmniQuant() or quant_algo.isPerTensorQuant():
             results.extend(self._load_int8_layer_weight(layer_weights, layer_id=layer_id, device=device))
         elif quant_algo.isWeightOnlyPerCol():
             results.extend(self._load_layer_weight_and_apply_int8(layer_weights, layer_id=layer_id, device=device))
@@ -607,17 +609,18 @@ class ModelWeightsLoader:
 
         return after_merge_tensor
 
-    def _load_and_convert_tensor(self, weight_info: WeightInfo, layer_id: Optional[int] = None, datatype: str = torch.float16):
+    def _load_and_convert_tensor(self, weight_info: WeightInfo, layer_id: Optional[int] = None, datatype: torch.dtype = torch.float16):
+        convert_type = datatype if weight_info.data_type is None else weight_info.data_type
         before_merge_tensors = []
         self._weight_log.record_loaded_tensor(weight_info.name)
         for ckpt_weight in weight_info.weights:
             name = ckpt_weight.tensor_name(layer_id)
             try:
-                before_merge_tensors.append(ckpt_weight.merge_fun(self.load_tensor(name, datatype)))
+                before_merge_tensors.append(ckpt_weight.merge_fun(self.load_tensor(name, convert_type)))
             except Exception as e:
                 raise Exception('load %s failed, except: %s' % (name, str(e)))
 
-        after_merge_tensor = weight_info.process_fun(before_merge_tensors).to(datatype)
+        after_merge_tensor = weight_info.process_fun(before_merge_tensors).to(convert_type)
         return after_merge_tensor
 
     def _split_and_sanitize_tensor(self, tensor: torch.Tensor, weight: WeightInfo):
@@ -634,14 +637,18 @@ class ModelWeightsLoader:
         split_fun = self._model_weights_info.tp_strategy.get(name)
         if not split_fun:
             raise Exception('this model not support TP: ' + name)
-        kv_broadcast = self._weights_info._head_num_kv == 1
-        qkv_hidden_size = self._weights_info._size_per_head *(self._weights_info._head_num + self._weights_info._head_num_kv * 2)
-        ts = split_fun(tensor, self._tp_size, tp_rank=self._tp_rank, hidden_size=self._weights_info._hidden_size, qkv_hidden_size=qkv_hidden_size, kv_broadcast=kv_broadcast)
+        ts = split_fun(t=tensor,
+                       tp=self._tp_size,
+                       tp_rank=self._tp_rank,
+                       hidden_size=self._weights_info._hidden_size,
+                       head_num=self._weights_info._head_num,
+                       head_num_kv=self._weights_info._head_num_kv,
+                       size_per_head=self._weights_info._size_per_head)
         return ts
 
     # 避免被 storage 影响多用显存
     def _sanitize(self, t):
-        return t.contiguous().clone().to(self._data_type)
+        return t.contiguous().clone()
 
 def estimate_load_parallel_num(config, tp_size):
     parallel_num = os.environ.get('LOAD_CKPT_NUM_PROCESS', None)

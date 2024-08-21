@@ -23,6 +23,19 @@ def git_deps():
         build_file = str(Label("//3rdparty/cutlass:cutlass.BUILD")),
     )
 
+    new_git_repository(
+        name = "flash_attention",
+        remote = "https://github.com/Dao-AILab/flash-attention.git",
+        # v2.5.6
+        commit = "6c9e60de566800538fedad2ad5e6b7b55ca7f0c5",
+        patches = [
+            "//patches/flash_attention:0001-fix-fix-arch-80-compile.patch",
+            "//patches/flash_attention:0002-fix-remove-torch-aten-dep.patch",
+            "//patches/flash_attention:0003-fix-fix-is-local-judge.patch",
+        ],
+        build_file = str(Label("//3rdparty/flash_attention:flash_attention.BUILD")),
+    )
+
     git_repository(
         name = "com_google_googletest",
         remote = "https://github.com/google/googletest.git",
@@ -91,6 +104,7 @@ def git_deps():
         name = "havenask",
         remote = "https://github.com/alibaba/havenask.git",
         commit = "3c973500afbd40933eb0a80cfdfb6592274377fb",
+        patches=["//patches/havenask:havenask.patch"],
         shallow_since = "1704038400 +0800",
         build_file = clean_dep("//3rdparty/kmonitor:kmonitor.BUILD"),
     )

@@ -209,7 +209,6 @@ void attention_rope(Buffer& input, size_t timestep, size_t base, size_t embed_di
 
 AttentionModuleOutput ArmCpuDevice::contextAttention(const AttentionModuleParams& params) {
     auto datatype      = params.input.type();
-    auto token_num     = params.input.shape()[0];
     auto batch_size    = params.common.context_batch_size;
     auto seq_len       = params.common.context_max_seq_len;
     auto head_num      = params.configs.head_num;
@@ -285,22 +284,22 @@ AttentionModuleOutput ArmCpuDevice::contextAttention(const AttentionModuleParams
         }
     }
 
-    if (params.configs.rope_config.embedding_style != RopeType::NOROPE) {
-        if (params.configs.rope_config.embedding_style == RopeType::Base) {
+    if (params.configs.rope_config.style != RopeType::No) {
+        if (params.configs.rope_config.style == RopeType::Base) {
             if (datatype == DataType::TYPE_FP32) {
                 context_rope<float>(*q_input,
-                                    params.configs.rope_config.embedding_base * params.configs.rope_config.base_scale,
-                                    params.configs.rope_config.embedding_dim);
+                                    params.configs.rope_config.base,
+                                    params.configs.rope_config.dim);
                 context_rope<float>(*k_input,
-                                    params.configs.rope_config.embedding_base * params.configs.rope_config.base_scale,
-                                    params.configs.rope_config.embedding_dim);
+                                    params.configs.rope_config.base,
+                                    params.configs.rope_config.dim);
             } else if (datatype == DataType::TYPE_FP16) {
                 context_rope<__fp16>(*q_input,
-                                     params.configs.rope_config.embedding_base * params.configs.rope_config.base_scale,
-                                     params.configs.rope_config.embedding_dim);
+                                     params.configs.rope_config.base,
+                                     params.configs.rope_config.dim);
                 context_rope<__fp16>(*k_input,
-                                     params.configs.rope_config.embedding_base * params.configs.rope_config.base_scale,
-                                     params.configs.rope_config.embedding_dim);
+                                     params.configs.rope_config.base,
+                                     params.configs.rope_config.dim);
             } else {
                 throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
             }
@@ -347,7 +346,6 @@ AttentionModuleOutput ArmCpuDevice::contextAttention(const AttentionModuleParams
 
     float scale = (1.0f / sqrtf(size_per_head * 1.0f));
 
-    auto softmax_type = qk_output->type();
     RUNTIME_ASSERT_OP_ARG(params.common.attention_mask,
                           "attention_mask must be provided for default context attention implementation");
     printBufferData(*params.common.attention_mask, "attention_mask: ");
@@ -365,9 +363,7 @@ AttentionModuleOutput ArmCpuDevice::contextAttention(const AttentionModuleParams
 
 AttentionModuleOutput ArmCpuDevice::decoderSelfAttention(const AttentionModuleParams& params) {
     auto   datatype      = params.input.type();
-    auto   token_num     = params.input.shape()[0];
     auto   batch_size    = params.common.decoder_batch_size;
-    auto   step          = params.common.decoder_max_seq_len;
     size_t kv_seq_len    = *static_cast<int*>(params.common.input_lengths.dataWithOffset(0));
     size_t seq_len       = *static_cast<int*>(params.common.sequence_lengths.dataWithOffset(0)) + 1 - kv_seq_len;
     auto   head_num      = params.configs.head_num;
@@ -452,29 +448,27 @@ AttentionModuleOutput ArmCpuDevice::decoderSelfAttention(const AttentionModulePa
     printBufferData(*k_input, "biased k_input");
     printBufferData(*v_input, "biased v_input");
 
-    if (params.configs.rope_config.embedding_style != RopeType::NOROPE) {
-        if (params.configs.rope_config.embedding_style == RopeType::Base) {
+    if (params.configs.rope_config.style != RopeType::No) {
+        if (params.configs.rope_config.style == RopeType::Base) {
 
             if (datatype == DataType::TYPE_FP32) {
                 attention_rope<float>(*q_input,
                                       seq_len + kv_seq_len - 1,
-                                      params.configs.rope_config.embedding_base * params.configs.rope_config.base_scale,
-                                      params.configs.rope_config.embedding_dim);
+                                      params.configs.rope_config.base,
+                                      params.configs.rope_config.dim);
                 attention_rope<float>(*k_input,
                                       seq_len + kv_seq_len - 1,
-                                      params.configs.rope_config.embedding_base * params.configs.rope_config.base_scale,
-                                      params.configs.rope_config.embedding_dim);
+                                      params.configs.rope_config.base,
+                                      params.configs.rope_config.dim);
             } else if (datatype == DataType::TYPE_FP16) {
                 attention_rope<__fp16>(*q_input,
                                        seq_len + kv_seq_len - 1,
-                                       params.configs.rope_config.embedding_base
-                                           * params.configs.rope_config.base_scale,
-                                       params.configs.rope_config.embedding_dim);
+                                       params.configs.rope_config.base,
+                                       params.configs.rope_config.dim);
                 attention_rope<__fp16>(*k_input,
                                        seq_len + kv_seq_len - 1,
-                                       params.configs.rope_config.embedding_base
-                                           * params.configs.rope_config.base_scale,
-                                       params.configs.rope_config.embedding_dim);
+                                       params.configs.rope_config.base,
+                                       params.configs.rope_config.dim);
             } else {
                 throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
             }

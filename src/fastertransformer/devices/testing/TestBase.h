@@ -26,8 +26,6 @@ class DeviceTestBase : public ::testing::Test {
 public:
     void SetUp() override {
         // Logger::getLogger().setLevel(Logger::Level::DEBUG);
-        // setenv("FT_DEBUG_LEVEL", "DEBUG", 1);
-        // setenv("FT_DEBUG_PRINT_LEVEL", "DEBUG", 1);
 
         initTestDevices();
         initTestDataDir();
@@ -127,7 +125,7 @@ protected:
             device_->copy({*buffer, *host_buffer});
         }
         device_->syncAndCheck();
-        return move(buffer);
+        return buffer;
     }
 
     template <typename T>
@@ -149,7 +147,7 @@ protected:
         device_->syncAndCheck();
         for (size_t i = 0; i < buffer.size(); i++) {
             printf("i=%ld, buffer[i] = %f, expected[i] = %f\n", i,
-                    (comp_buffer->data<T>())[i], expected[i]);
+                   float((comp_buffer->data<T>())[i]), float(expected[i]));
             ASSERT_EQ((comp_buffer->data<T>())[i], expected[i]);
         }
     }
@@ -186,9 +184,9 @@ protected:
             device_->copy({*device_buffer, *buffer});
             device_->syncAndCheck();
             printf("created device buffer from tensor at %p with data=%p\n", device_buffer.get(), device_buffer->data());
-            return std::move(device_buffer);
+            return device_buffer;
         } else {
-            return std::move(buffer);
+            return buffer;
         }
     }
 
@@ -203,9 +201,9 @@ protected:
             device_->copy({*device_buffer, *buffer});
             device_->syncAndCheck();
             printf("created device buffer from tensor at %p with data=%p\n", device_buffer.get(), device_buffer->data());
-            return std::move(device_buffer);
+            return device_buffer;
         } else {
-            return std::move(buffer);
+            return buffer;
         }
     }
 
@@ -289,7 +287,7 @@ protected:
         }
         auto kv_cache_offset_gpu_buf = device_->allocateBuffer({kv_cache_offset->type(), kv_cache_offset->shape()});
         device_->copy({*kv_cache_offset_gpu_buf, *kv_cache_offset});
-        return move(kv_cache_offset_gpu_buf);
+        return kv_cache_offset_gpu_buf;
     }
 
     void assertTensorClose(const torch::Tensor& a, const torch::Tensor& b,
@@ -320,40 +318,6 @@ protected:
             std::cout << "rel diff: " << torch::abs(a_cmp - b_cmp) / torch::abs(a_cmp) << std::endl;
             ASSERT_TRUE(false);
         }
-    }
-
-    // Note: used for catching error code for multiprocess test, do not remove
-    bool checkTensorClose(const torch::Tensor& a, const torch::Tensor& b,
-                           double rtol = 0, double atol = 0) {
-        auto a_cmp = a;
-        auto b_cmp = b;
-        rtol = rtol ? rtol : rtol_;
-        atol = atol ? atol : rtol_;
-        if (a.is_floating_point() != b.is_floating_point()) {
-            return false;
-        }
-
-        if (a_cmp.dtype() != b_cmp.dtype()) {
-            auto cmp_type = (a_cmp.dtype().itemsize() > b_cmp.dtype().itemsize()) ?
-                            a_cmp.dtype() : b_cmp.dtype();
-            a_cmp = a_cmp.to(cmp_type);
-            b_cmp = b_cmp.to(cmp_type);
-        }
-        a_cmp = a_cmp.squeeze();
-        b_cmp = b_cmp.squeeze();
-
-        const auto close = torch::allclose(a_cmp, b_cmp, rtol, atol);
-        if (!close) {
-            std::cout << "assert tensor close failed!" << std::endl;
-            std::cout << "rtol: " << rtol << std::endl;
-            std::cout << "atol: " << atol << std::endl;
-            std::cout << "a: " << a << std::endl;
-            std::cout << "b: " << b << std::endl;
-            std::cout << "abs diff: " << torch::abs(a_cmp - b_cmp) << std::endl;
-            std::cout << "rel diff: " << torch::abs(a_cmp - b_cmp) / torch::abs(a_cmp) << std::endl;
-            return false;
-        }
-        return true;
     }
 
     size_t getFreePort() {

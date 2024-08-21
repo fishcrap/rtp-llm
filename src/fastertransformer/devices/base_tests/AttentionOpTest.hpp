@@ -43,7 +43,12 @@ struct AttentionImpl : torch::nn::Module {
         // k = rope->forward(k, position_ids);
         // std::cout << "k shape is " << k.sizes() << "\n";
         // std::cout << "q shape is " << q.sizes() << "\n";
-
+        if (head_num > head_kv_num) {
+            k = k.reshape({batch_size, head_kv_num, 1, kv_seq_len, head_dim}).expand({-1, -1, head_num / head_kv_num, -1, -1});
+            v = v.reshape({batch_size, head_kv_num, 1, kv_seq_len, head_dim}).expand({-1, -1, head_num / head_kv_num, -1, -1});
+            k = k.reshape({batch_size, head_num, kv_seq_len, head_dim});
+            v = v.reshape({batch_size, head_num, kv_seq_len, head_dim});
+        }
         auto attn_weights = torch::matmul(q, k.transpose(2, 3));
         if (attention_mask.has_value()) {
             attention_mask = attention_mask->view({batch_size, 1, seq_len, kv_seq_len});
@@ -80,10 +85,10 @@ public:
 };
 
 void AttentionOpTest::contextAttentionOpTest(size_t batch_size,
-                                                 size_t seq_len,
-                                                 size_t num_heads,
-                                                 size_t num_key_value_heads,
-                                                 size_t head_dim) {
+                                             size_t seq_len,
+                                             size_t num_heads,
+                                             size_t num_key_value_heads,
+                                             size_t head_dim) {
     Attention attention = Attention();
     attention.ptr()->to(torch::Device(torch::kCPU));
     auto state_dict = attention.ptr()->named_parameters();
@@ -131,10 +136,11 @@ void AttentionOpTest::contextAttentionOpTest(size_t batch_size,
     auto padding_offset_device  = createDeviceBuffer<int>(padding_offset_host);
     auto cu_seqlens_device      = createDeviceBuffer<int>(cu_seqlens_host);
     auto attention_mask_device  = createDeviceBuffer<half>(attention_mask_host);
-    auto rope_config            = RopeConfig({RopeType::NOROPE, head_dim, 10000, 1, 2048, 1, 1});
+    auto rope_config            = RopeConfig({RopeStyle::No, (int)head_dim, 10000, 1, 2048, 1, 1});
 
     auto common_inputs      = AttentionCommonInputs({*input_lengths, *sequence_lengths});
     common_inputs.cu_seqlens = move(cu_seqlens_device);
+    common_inputs.cu_kv_seqlens = common_inputs.cu_seqlens;
     common_inputs.padding_offset = move(padding_offset_device);
     common_inputs.position_ids = position_ids_device;
     common_inputs.attention_mask = attention_mask_device;
@@ -172,17 +178,18 @@ void AttentionOpTest::contextAttentionOpTest(size_t batch_size,
 }
 
 void AttentionOpTest::selfAttentionOpTest(size_t batch_size,
-                                              size_t seq_len,
-                                              size_t kv_seq_len,
-                                              size_t num_heads,
-                                              size_t num_key_value_heads,
-                                              size_t head_dim) {
+                                          size_t seq_len,
+                                          size_t kv_seq_len,
+                                          size_t num_heads,
+                                          size_t num_key_value_heads,
+                                          size_t head_dim) {
     Attention attention = Attention();
     attention.ptr()->to(torch::Device(torch::kCPU));
     auto state_dict = attention.ptr()->named_parameters();
     torch::NoGradGuard no_grad;
 
     auto tensor_options = torch::TensorOptions(torch::kFloat).device(torch::Device(torch::kCPU));
+    auto half_tensor_options = torch::TensorOptions(torch::kHalf).device(torch::Device(torch::kCPU));
     auto int_tensor_options = torch::TensorOptions(torch::kInt).device(torch::Device(torch::kCPU));
 
     auto query_states_host = torch::rand(
@@ -218,7 +225,7 @@ void AttentionOpTest::selfAttentionOpTest(size_t batch_size,
     padding_kv_seq_len = (kv_seq_len == 0) ? 2 * tokensPerBlock : padding_kv_seq_len;
     auto kvcache_pad = torch::zeros(
         {1, (int)batch_size, 2, (int)padding_kv_seq_len, (int)num_key_value_heads * (int)head_dim},
-        tensor_options);
+        half_tensor_options);
 
     auto k_cache_host = kvcache_pad.index(
         {0, torch::indexing::Slice(), 0, torch::indexing::Slice(0, kv_seq_len), torch::indexing::Slice()}
@@ -241,7 +248,7 @@ void AttentionOpTest::selfAttentionOpTest(size_t batch_size,
     auto sequence_lengths_device    = createDeviceBuffer<int>(sequence_lengths_host);
     auto input_lengths_device       = createDeviceBuffer<int>(input_lengths_host);
 
-    auto rope_config = RopeConfig({RopeType::NOROPE, head_dim, 10000, 1, 2048, 1, 1});
+    auto rope_config = RopeConfig({RopeStyle::No, (int)head_dim, 10000, 1, 2048, 1, 1});
 
     // cache manager need one block for preserve and every seq need one block for preserve.
     auto block_num = 2 * batch_size * ((kv_seq_len + tokensPerBlock - 1) / tokensPerBlock + 1) + 1;

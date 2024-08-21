@@ -1,10 +1,14 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
-load("//bazel:arch_select.bzl", "requirement", "whl_deps")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "requirement", "whl_deps", "torch_deps")
+load("//bazel:arch_select.bzl", "embedding_arpc_deps")
+package(default_visibility = ["//maga_transformer:__subpackages__"])
 
 requirement([
     "grpcio"
 ])
 
+
+embedding_arpc_deps()
 # load("//bazel:tf_proto.bzl", "tf_proto_library")
 
 linkopts = [
@@ -39,6 +43,7 @@ cc_library(
     deps = torch_deps() + [
         "//:gpt_init_params_hdr",
         "//src/fastertransformer/utils:py_utils",
+        "@havenask//aios/alog:alog",
     ],
     visibility = ["//visibility:public"],
 )
@@ -50,6 +55,31 @@ cc_library(
     ]),
     srcs = glob([
         "dataclass/*.cc",
+    ]),
+    deps = torch_deps() + [
+        ":utils",
+        ":common",
+        ":cache",
+        ":system_prompt",
+        "//:gpt_init_params_hdr",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@havenask//aios/autil:synchronized_queue",
+        "//src/fastertransformer/utils:utils",
+        "//src/fastertransformer/devices:devices_base",
+        "//src/fastertransformer/devices:device_utils",
+        "//src/fastertransformer/models:weights_define",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "lora",
+    hdrs = glob([
+        "lora/*.h",
+    ]),
+    srcs = glob([
+        "lora/*.cc",
     ]),
     deps = torch_deps() + [
         ":utils",
@@ -205,6 +235,7 @@ cc_library(
         ":dataclass",
         ":models",
         ":common",
+        ":lora",
         ":system_prompt",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -241,63 +272,6 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
-    visibility = ["//visibility:public"]
-)
-
-cc_library(
-    name = "embedding_engine",
-    hdrs = glob([
-        "embedding_engine/*.h",
-    ]),
-    srcs = glob([
-        "embedding_engine/*.cc",
-    ]),
-    deps = torch_deps() + [
-        ":dataclass",
-        ":models",
-        ":schedulers",
-        ":engine_base",
-        ":common",
-        ":normal_engine",
-        ":system_prompt",
-        ":system_prompt_constructor",
-        ":embedding_handler_base",
-        ":embedding_handler",
-    ],
-    visibility = ["//visibility:public"]
-)
-
-cc_library(
-    name = "embedding_handler_base",
-    hdrs = [
-        "embedding_engine/handlers/HandlerBase.h",
-    ],
-    deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-    ],
-    copts = copts(),
-    visibility = ["//visibility:public"]
-)
-
-cc_library(
-    name = "embedding_handler",
-    hdrs = glob([
-        "embedding_engine/handlers/*.h",
-    ], exclude = [
-        "embedding_engine/handlers/HandlerBase.h"
-    ]),
-    srcs = glob([
-        "embedding_engine/handlers/*.cc",
-    ]),
-    deps = torch_deps() + [
-        ":embedding_handler_base",
-        ":dataclass",
-        ":models",
-        "//:th_op_hdrs",
-        "//src/fastertransformer/utils:utils",
-    ],
-    copts = copts(),
     visibility = ["//visibility:public"]
 )
 
@@ -342,6 +316,21 @@ cc_library(
 )
 
 cc_library(
+    name = "multimodal_processor",
+    hdrs = glob([
+        "multimodal_processor/*.h",
+    ]),
+    srcs = glob([
+        "multimodal_processor/*.cc",
+    ]),
+    deps = [
+        "//src/fastertransformer/devices:devices_base",
+        "//src/fastertransformer/utils:py_utils",
+    ],
+    visibility = ["//visibility:public"]
+)
+
+cc_library(
     name = "model_rpc_server",
     srcs = ["model_rpc/ModelRpcServer.cc", "model_rpc/QueryConverter.cc"],
     hdrs = ["model_rpc/ModelRpcServer.h", "model_rpc/QueryConverter.h"],
@@ -349,9 +338,11 @@ cc_library(
         "//maga_transformer/cpp/proto:model_rpc_service_cc_proto",
         "//maga_transformer/cpp:dataclass",
         "//maga_transformer/cpp:normal_engine",
-        "//maga_transformer/cpp:embedding_engine",
+        "//maga_transformer/cpp/embedding_engine:embedding_engine",
+        ":embedding_arpc_deps",
         # "//maga_transformer/cpp:speculative_engine",
         "//src/fastertransformer/devices:devices_base",
+        "//maga_transformer/cpp:multimodal_processor",
     ],
     visibility = ["//visibility:public"]
 )

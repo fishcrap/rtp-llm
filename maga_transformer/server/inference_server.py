@@ -110,9 +110,13 @@ class InferenceServer(object):
         except BaseException as e:
             # 捕获非Cancel以外所有的异常,所以使用BaseException
             self._access_logger.log_exception_access(request, e)
-            kmonitor.report(AccMetrics.ERROR_QPS_METRIC, 1, {"source": request.get("source", "unkown")})
+            format_e = format_exception(e)
+            kmonitor.report(AccMetrics.ERROR_QPS_METRIC, 1, {
+                "source": request.get("source", "unkown"),
+                "error_code": str(format_e.get("error_code", -1))
+            })
             yield response_data_prefix + \
-                json.dumps(format_exception(e), ensure_ascii=False) + "\r\n\r\n"
+                json.dumps(format_e, ensure_ascii=False) + "\r\n\r\n"
 
     async def update(self, version_info: VersionInfo):
         request = version_info.model_dump()
@@ -175,8 +179,8 @@ class InferenceServer(object):
         start_time = time.time()
         request[request_id_field_name] = self._atomic_count.increment()
         kmonitor.report(AccMetrics.QPS_METRIC, 1, {"source": request.get("source", "unkown")})
-        with self._controller:
-            try:
+        try:
+            with self._controller:            
                 assert self._embedding_endpoint is not None, "embedding pipeline should not be None"
                 result, logable_result = await self._embedding_endpoint.handle(request)
                 # do not log result since too big
@@ -184,9 +188,10 @@ class InferenceServer(object):
                     self._access_logger.log_success_access(request, logable_result)
                 end_time = time.time()
                 kmonitor.report(GaugeMetrics.LANTENCY_METRIC, (end_time - start_time) * 1000)
+                kmonitor.report(AccMetrics.SUCCESS_QPS_METRIC, 1, {"source": request.get("source", "unkown")})
                 return ORJSONResponse(result)
-            except BaseException as e:
-                return self._handle_exception(request, e)
+        except BaseException as e:
+            return self._handle_exception(request, e)
 
     async def similarity(self, request: Dict[str, Any], raw_request: Request):
         return await self.embedding(request, raw_request)
@@ -204,7 +209,10 @@ class InferenceServer(object):
             error_code = 499
         else:
             error_code = 500
-            kmonitor.report(AccMetrics.ERROR_QPS_METRIC, 1, {"source": request.get("source", "unkown")})
+            kmonitor.report(AccMetrics.ERROR_QPS_METRIC, 1, {
+                "source": request.get("source", "unkown"),
+                "error_code": str(format_exception(e).get("error_code", -1))
+            })
         rep = JSONResponse(format_exception(e), status_code=error_code)
         return rep
 
@@ -289,3 +297,13 @@ class InferenceServer(object):
             return self._inference_worker.model.get_kv_cache_info()
         else:
             return KVCacheInfo(available_kv_cache=0, total_kv_cache=0)
+
+    def set_debug_log(self, req: Union[str,Dict[Any, Any]]) -> None:
+        if isinstance(req, str):
+            req = json.loads(req)
+        return torch.ops.fastertransformer.set_debug_log_level(req['debug'])
+
+    def set_debug_print(self, req: Union[str,Dict[Any, Any]]) -> None:
+        if isinstance(req, str):
+            req = json.loads(req)
+        return torch.ops.fastertransformer.set_debug_print_level(req['debug'])

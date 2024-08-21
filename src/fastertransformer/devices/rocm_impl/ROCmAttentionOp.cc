@@ -2,13 +2,9 @@
 #include "src/fastertransformer/devices/CommonDefines.h"
 #include "src/fastertransformer/cuda/Dispatch.h"
 #include "src/fastertransformer/devices/utils/DebugUtils.h"
-// #include "src/fastertransformer/kernels/layernorm_kernels.h"
-// #include "src/fastertransformer/kernels/activation_kernels.h"
-// #include "src/fastertransformer/cutlass/interface.h"
-// #include "src/fastertransformer/utils/compiler_config.h"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
-// #include "src/fastertransformer/kernels/kv_cache_utils.h"
+#include "src/fastertransformer/kernels/gpt_kernels.h"
+#include "src/fastertransformer/kernels/decoder_masked_multihead_attention/decoder_masked_multihead_attention.h"
 
 using namespace std;
 namespace fastertransformer {
@@ -135,18 +131,6 @@ AttentionModuleOutput ROCmDevice::contextAttention(const AttentionModuleParams& 
     float* scale_out_ptr = nullptr;
     int    int8_mode     = 0;
 
-    // logn attention
-    bool      use_logn_attn = params.configs.rope_config.use_logn_attn;
-    const int logn_seq_len  = params.configs.rope_config.logn_seq_len;
-    // rope
-    const auto rope_embedding_dim             = params.configs.rope_config.embedding_dim;
-    const auto rope_embedding_style           = (int)params.configs.rope_config.embedding_style;
-    const auto rope_embedding_base            = params.configs.rope_config.embedding_base;
-    const auto rope_rotary_embedding_scale    = params.configs.rope_config.rotary_embedding_scale;
-    const auto rope_dynamic_embedding_max_pos = params.configs.rope_config.dynamic_embedding_max_pos;
-    const auto rope_org_embedding_max_pos     = params.configs.rope_config.org_embedding_max_pos;
-    const auto rope_base_scale                = params.configs.rope_config.base_scale;
-
     DISPATCH_CUDA_FUNCTION_DATA_TYPE(datatype,
                                      invokeAddFusedQKVBiasTranspose,
                                      q_output->data(),
@@ -165,15 +149,8 @@ AttentionModuleOutput ROCmDevice::contextAttention(const AttentionModuleParams& 
                                      head_num,
                                      kv_head_num,
                                      size_per_head,
-                                     rope_embedding_dim,
-                                     rope_embedding_style,
-                                     rope_embedding_base,
-                                     rope_rotary_embedding_scale,
-                                     rope_dynamic_embedding_max_pos,
-                                     rope_org_embedding_max_pos,
-                                     rope_base_scale,
-                                     logn_seq_len,
-                                     use_logn_attn,
+                                     params.configs.rope_config,
+                                     params.configs.use_logn_attn,
                                      scale_out_ptr,
                                      int8_mode,
                                      false,
@@ -213,7 +190,6 @@ AttentionModuleOutput ROCmDevice::contextAttention(const AttentionModuleParams& 
                                 seq_len)) {
         return;
     } else {
-        FT_LOG_INFO("Do not use fmha!");
         // TODO(lidongjin): Only support float32 gemm output.
         // TODO: deal with GQA: duplicate k_output by head_num / kv_head_num ratio.
         auto qk_output = gemm({*q_output,
@@ -283,19 +259,6 @@ void selfAttentionwrapper(const AttentionModuleParams params,
 
     // TODO(lidongjin) support relative attention
     const T* relative_attention_bias_ptr = nullptr;
-
-    // rope
-    int rotary_embedding_dim = params.configs.rope_config.embedding_dim;
-    int rotary_embedding_style = (int)params.configs.rope_config.embedding_style;
-    float rotary_embedding_base  = params.configs.rope_config.embedding_base;
-    float rotary_embedding_scale = params.configs.rope_config.rotary_embedding_scale;
-    int dynamic_embedding_max_pos = params.configs.rope_config.dynamic_embedding_max_pos;
-    int base_scale = params.configs.rope_config.base_scale;
-
-    // logn attention
-    bool        use_logn_attn = params.configs.rope_config.use_logn_attn;
-    const int   logn_seq_len  = params.configs.rope_config.logn_seq_len;
-
     // prefix prompt
 
     auto prefix_lengths = params.common.prefix_prompt_lengths ? params.common.prefix_prompt_lengths->data<int>() : nullptr;
@@ -306,7 +269,7 @@ void selfAttentionwrapper(const AttentionModuleParams params,
 
     float q_scaling = params.configs.q_scaling;
     int relative_attention_bias_stride = 0;
-    const T* linear_bias_slopes = nullptr;
+    const float* linear_bias_slopes = nullptr;
     const bool* masked_tokens = nullptr;
 
     // TODO(lidongjin) support int8
@@ -327,15 +290,9 @@ void selfAttentionwrapper(const AttentionModuleParams params,
         local_head_num,
         local_head_num_kv,
         size_per_head,
-        rotary_embedding_dim,
-        rotary_embedding_style,
-        rotary_embedding_base,
+        params.configs.rope_config,
+        params.configs.use_logn_attn,
         nullptr,
-        logn_seq_len,
-        use_logn_attn,
-        rotary_embedding_scale,
-        dynamic_embedding_max_pos,
-        base_scale,
         step,
         prefix_lengths,
         max_prefix_length,

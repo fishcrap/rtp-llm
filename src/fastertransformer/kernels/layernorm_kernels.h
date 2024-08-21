@@ -44,7 +44,7 @@ void invokeGeneralAddBiasResidualLayerNorm(T* out, T* norm_output, const T* inpu
     int8_t* out_quant = nullptr, bool return_normed_output = false);
 
 template <typename T>
-void invokeGeneralLayerNorm(T* out, const T* input, const T* gamma, const T* beta, const float eps, const int tokens,
+void invokeGeneralLayerNorm(T* out, T* normed_output, const T* input, const T* gamma, const T* beta, const float eps, const int tokens,
     const int hidden_dim, cudaStream_t stream = 0, bool use_diff_of_squares = true, const float* scale = nullptr,
     float* dynamic_scale = nullptr, int8_t* out_quant = nullptr, bool return_normed_output = false);
 
@@ -58,5 +58,16 @@ void invokeQkLayerNorm(T* __restrict qkv,
                        const int head_num_kv,
                        const int size_per_head,
                        cudaStream_t stream = 0);
+
+template<typename T>
+void invokeLayerNormWithStride(T* __restrict data,
+                               const T* __restrict gamma,
+                               const T* __restrict beta,
+                               const float  layernorm_eps,
+                               const int    tokens,
+                               const int    hidden_size,
+                               const int    stride,
+                               const int    offset,
+                               cudaStream_t stream);
 
 }  // namespace fastertransformer

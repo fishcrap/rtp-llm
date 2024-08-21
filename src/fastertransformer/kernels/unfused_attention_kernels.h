@@ -17,7 +17,9 @@
 
 #include "src/fastertransformer/kernels/kv_cache_utils.h"
 #include "src/fastertransformer/core/Tensor.h"
+#include "src/fastertransformer/utils/RopeConfig.h"
 #include "src/fastertransformer/utils/compiler_config.h"
+
 
 namespace fastertransformer {
 
@@ -54,7 +56,7 @@ struct MaskedSoftmaxParam {
 
     // Optional parameters that depend on the type of attention.
     // The slopes of the linear position bias of ALiBi.
-    const T* linear_bias_slopes = nullptr;  // (head_num,), optional
+    const float* linear_bias_slopes = nullptr;  // (head_num,), optional
 };
 
 enum class KvCacheDataType : int8_t {
@@ -148,15 +150,8 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        head_num,
                                     const int                        head_num_kv,
                                     const int                        size_per_head,
-                                    const int                        rotary_embedding_dim,
-                                    const int                        rotary_embedding_style,
-                                    const float                      rotary_embedding_base,
-                                    const float                      rotary_embedding_scale,
-                                    const int                        dynamic_embedding_max_pos,
-                                    const int                        org_embedding_max_pos,
-                                    const int                        base_scale,
-                                    const int                        logn_seq_len,
-                                    const bool                       use_logn_attention,
+                                    const RopeConfig                 rope_config,
+                                    const bool                       use_logn_attn,
                                     const float*                     scale,
                                     const int                        int8_mode,
                                     const bool                       use_paged_fmha,

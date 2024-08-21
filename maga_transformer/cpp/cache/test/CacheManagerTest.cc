@@ -34,7 +34,6 @@ protected:
 
 TEST_F(CacheManagerTest, testSimple) {
     auto            cache_config = init_config();
-    ft::DeviceBase* device;
     CacheManager    cache_manager(cache_config, device_);
 
     ASSERT_EQ(cache_manager.freeBlockNums(), 3);
@@ -62,7 +61,6 @@ TEST_F(CacheManagerTest, testSimple) {
 
 TEST_F(CacheManagerTest, testAllocateWithFreeCache) {
     auto            cache_config = init_config();
-    ft::DeviceBase* device;
     CacheManager    cache_manager(cache_config, device_);
 
     auto [success1, index1, reuse_len] = cache_manager.mallocWithCacheImpl(3, {1000, 2000, 3000});
@@ -81,13 +79,15 @@ TEST_F(CacheManagerTest, testAllocateWithFreeCache) {
     ASSERT_EQ(cache_manager.blockRefCounter().getRefCounter(1), 1);
     ASSERT_EQ(cache_manager.blockRefCounter().getRefCounter(2), 1);
     ASSERT_EQ(cache_manager.blockRefCounter().getRefCounter(3), 0);
-
     ASSERT_EQ(cache_manager.freeBlockNums(), 1);
+
+    // paritial fallback case
+    cache_manager.freeWithCache(index2, {1000, 2000, 3000, 4000, 5000});
+    ASSERT_TRUE(cache_manager.blockCache().hasKey({1000, 2000}));
 }
 
 TEST_F(CacheManagerTest, testAllocateWithReuse) {
     auto            cache_config = init_config();
-    ft::DeviceBase* device;
     CacheManager    cache_manager(cache_config, device_);
 
     ASSERT_EQ(cache_manager.freeBlockNums(), 3);
@@ -427,22 +427,45 @@ TEST_F(CacheManagerTest, testBlockCacheHoldBlockNums) {
     CacheConfig cache_config(2, 10, 1, 1, 1, ft::TYPE_INT8);
     CacheManager cache_manager(cache_config, device_);
     ASSERT_EQ(cache_manager.block_cache_.holdBlockNums(), 0);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 9);
 
     auto [success1, index1, reuse_len] = cache_manager.mallocWithCacheImpl(3, {1000, 2000, 3000});
     ASSERT_EQ(index1, std::vector<int>({1, 2, 3}));
+    ASSERT_EQ(cache_manager.availableBlockNums(), 6);
 
     cache_manager.freeWithCache(index1, {1000, 2000, 3000});
     ASSERT_EQ(cache_manager.block_cache_.holdBlockNums(), 2);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 9);
 
     auto [sucecss2, index2, reuseNum2] = cache_manager.mallocWithCacheImpl(3, {1000, 1002, 1003});
     ASSERT_EQ(index2, std::vector<int>({1, 3, 4}));
     ASSERT_EQ(reuseNum2, 1);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 6);
+
+    auto [sucecss3, index3, reuseNum3] = cache_manager.mallocWithCacheImpl(3, {1000, 1004, 1005});
+    ASSERT_EQ(index3, std::vector<int>({1, 5, 6}));
+    ASSERT_EQ(reuseNum3, 1);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 4);
 
     cache_manager.freeWithCache(index2, {1000, 1002, 1003});
     ASSERT_EQ(cache_manager.block_cache_.holdBlockNums(), 3);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 6);
 
-    cache_manager.block_cache_.pop();
-    ASSERT_EQ(cache_manager.block_cache_.holdBlockNums(), 2);
+    cache_manager.freeWithCache(index3, {1000, 1004, 1005});
+    ASSERT_EQ(cache_manager.block_cache_.holdBlockNums(), 4);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 9);
+
+    ASSERT_EQ(cache_manager.block_cache_.size(), 3);
+    cache_manager.maybeFreeBlockFromCache(9);
+    ASSERT_EQ(cache_manager.block_cache_.size(), 0);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 9);
+    ASSERT_EQ(cache_manager.freeBlockNums(), 9);
+
+    auto [success4, blocks4] = cache_manager.malloc(3);
+    ASSERT_EQ(blocks4.offset, std::vector<int>({1, 2, 3}));
+    ASSERT_EQ(cache_manager.availableBlockNums(), 6);
+    cache_manager.free(blocks4.offset);
+    ASSERT_EQ(cache_manager.availableBlockNums(), 9);
 }
 
 }  // namespace rtp_llm

@@ -2,6 +2,7 @@
 
 #include "src/fastertransformer/utils/layernorm_types.h"
 #include "src/fastertransformer/utils/activation_types.h"
+#include "src/fastertransformer/utils/RopeConfig.h"
 
 #include <vector>
 #include <map>
@@ -14,7 +15,19 @@ enum QuantMethod {
     GptQ                = 2,
     Awq                 = 3,
     SmoothQuant         = 4,
-    OmniQuant           = 5
+    OmniQuant           = 5,
+    PerTensorQuant      = 6
+};
+
+enum TaskType {
+    DENSE_EMBEDDING    = 0,
+    ALL_EMBEDDING      = 1,
+    SPARSE_EMBEDDING   = 2,
+    COLBERT_EMBEDDING  = 3,
+    LANGUAGE_MODEL     = 4,
+    SEQ_CLASSIFICATION = 5,
+    RERANKER           = 6,
+    LINEAR_SOFTMAX     = 7
 };
 
 struct RoleSpecialTokens {
@@ -33,6 +46,9 @@ public:
     {}
     bool isWeightOnlyPerCol() const {
         return quant_method_ == WeightOnlyPerCol;
+    }
+    bool isPerTensorQuant() const {
+        return quant_method_ == PerTensorQuant;
     }
     bool isGptq() const {
         return quant_method_ == GptQ;
@@ -108,6 +124,7 @@ public:
     std::string        activation_type_str_ = "Gelu";
     LayerNormType  layernorm_type_      = LayerNormType::pre_layernorm;
     NormType       norm_type_           = NormType::layernorm;
+    TaskType       task_type_           = TaskType::LANGUAGE_MODEL;
     ActivationType activation_type_     = ActivationType::Gelu;
 
     int64_t rotary_embedding_dim_      = 0;
@@ -115,14 +132,13 @@ public:
     int64_t position_ids_style_        = 0;
     float rotary_embedding_base_     = 10000.f;
     double  rotary_embedding_scale_  = 1.0;
-    int64_t dynamic_embedding_max_pos_ = 0;
+    double  rotary_factor1_          = 0;
+    double  rotary_factor2_          = 0;
     int64_t org_embedding_max_pos_     = 0;
-    int64_t base_scale_                = 1;
     // for Gemma, hidden_states = hidden_states * (hidden_size**0.5)
     double  input_embedding_scalar_    = 1;
 
     bool    use_logn_attn_ = false;
-    int64_t logn_seq_len_  = 2048;
     double  q_scaling_ = 1;
     bool    qk_norm_ = false;
 
@@ -133,6 +149,7 @@ public:
     bool use_norm_attn_out_residual_ = false;
 
     std::string data_type_         = "fp16";
+    int64_t     local_rank_        = 0;
 
     int64_t              max_seq_len_                = 0;
     int64_t              vocab_size_                 = 0;
@@ -170,7 +187,11 @@ public:
     int64_t max_context_batch_size_  = 1;
     int64_t gen_num_per_circle_      = 1;
 
-    bool     is_multimodal_       = false;
+    bool                 is_multimodal_ = false;
+    std::vector<int64_t> mm_sep_tokens_ = {};
+    bool                 include_sep_tokens_ = false;
+    bool                 cal_mm_tokens_in_rotary_emb_ = true;
+
     bool     int8_kv_cache_       = false;
     bool     pre_allocate_op_mem_ = true;
     int64_t  seq_size_per_block_  = 8;
@@ -181,6 +202,8 @@ public:
     int64_t  kv_cache_mem_mb_                  = 0;
     bool     reuse_cache_                      = false;
     bool     enable_partial_fallback_          = false;
+    bool     enable_fast_gen_                  = false;
+    int64_t  fast_gen_max_context_len_         = 0;
 
     bool use_medusa_ = false;
     bool use_expert_attention_ = false; // true for CogVLM2, false for other models
@@ -204,8 +227,11 @@ public:
     void insertMultiTaskPromptTokens(std::string task_id, std::vector<int64_t> tokens_id);
     void setLayerNormType();
     void setNormType();
+    void setTaskType(std::string task);
     void setActivationType();
-    bool isGatedActivation();
+    bool isGatedActivation() const;
+
+    RopeConfig getRopeConfig() const;
 };
 
 }

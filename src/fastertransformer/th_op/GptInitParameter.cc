@@ -16,9 +16,10 @@ GptInitParameter::GptInitParameter(int64_t head_num,
     head_num_(head_num),
     size_per_head_(size_per_head),
     num_layers_(num_layers),
+    hidden_size_(hidden_size),
     max_seq_len_(max_seq_len),
-    vocab_size_(vocab_size),
-    hidden_size_(hidden_size) {
+    vocab_size_(vocab_size)
+{
 }
 
 void GptInitParameter::insertMultiTaskPromptTokens(std::string task_id, std::vector<int64_t> tokens_id) {
@@ -37,11 +38,33 @@ void GptInitParameter::setNormType() {
     norm_type_ = getNormType(norm_type_str_);
 }
 
+void GptInitParameter::setTaskType(std::string task) {
+    if (task == "DENSE_EMBEDDING") {
+        task_type_ = TaskType::DENSE_EMBEDDING;
+    } else if (task == "ALL_EMBEDDING") {
+        task_type_ = TaskType::ALL_EMBEDDING;
+    } else if (task == "SPARSE_EMBEDDING") {
+        task_type_ = TaskType::SPARSE_EMBEDDING;
+    } else if (task == "COLBERT_EMBEDDING") {
+        task_type_ = TaskType::COLBERT_EMBEDDING;
+        } else if (task == "LANGUAGE_MODEL") {
+        task_type_ = TaskType::LANGUAGE_MODEL;
+    } else if (task == "SEQ_CLASSIFICATION") {
+        task_type_ = TaskType::SEQ_CLASSIFICATION;
+    } else if (task == "RERANKER") {
+        task_type_ = TaskType::RERANKER;
+    } else if (task == "LINEAR_SOFTMAX") {
+        task_type_ = TaskType::LINEAR_SOFTMAX;
+    } else {
+        FT_CHECK_WITH_INFO(false, "unkown task type: " + task);
+    }
+}
+
 void GptInitParameter::setActivationType() {
     activation_type_ = getActivationType(activation_type_str_);
 }
 
-bool GptInitParameter::isGatedActivation() {
+bool GptInitParameter::isGatedActivation() const {
     return fastertransformer::isGatedActivation(activation_type_);
 }
 
@@ -66,6 +89,9 @@ void QuantAlgo::setQuantAlgo(const std::string &quant_method, int64_t bits, int6
     } else if (quant_method == "omni_quant") {
         quant_method_ = OmniQuant;
         weight_bits_ = 8;
+    } else if (quant_method == "pertensor_quant"){
+        quant_method_ = PerTensorQuant;
+        weight_bits_ = 8;
     } else {
         throw std::invalid_argument("unknown quant_method: " + quant_method);
     }
@@ -77,7 +103,20 @@ void QuantAlgo::setQuantAlgo(const std::string &quant_method, int64_t bits, int6
     }
 }
 
+RopeConfig GptInitParameter::getRopeConfig() const {
+    RopeConfig rope_config;
+    rope_config.style        = (RopeStyle)rotary_embedding_style_;
+    rope_config.dim          = rotary_embedding_dim_;
+    rope_config.base         = rotary_embedding_base_;
+    rope_config.scale        = rotary_embedding_scale_;
+    rope_config.max_pos      = org_embedding_max_pos_;
+    rope_config.factor1      = rotary_factor1_;
+    rope_config.factor2      = rotary_factor2_;
+    return rope_config;
+}
+
 void registerGptInitParameter(py::module m) {
+
 #define DEF_PROPERTY(name) .def_readwrite(#name, &SpecialTokens::name##_)
 
 #define REGISTER_PROPERTYS                      \
@@ -118,6 +157,7 @@ void registerGptInitParameter(py::module m) {
     .def("isAwq", &QuantAlgo::isAwq)
     .def("isSmoothQuant", &QuantAlgo::isSmoothQuant)
     .def("isOmniQuant", &QuantAlgo::isOmniQuant)
+    .def("isPerTensorQuant", &QuantAlgo::isPerTensorQuant)
     .def("isQuant", &QuantAlgo::isQuant)
     .def("isGroupwise", &QuantAlgo::isGroupwise)
     .def("getGroupSize", &QuantAlgo::getGroupSize)
@@ -171,9 +211,9 @@ void registerGptInitParameter(py::module m) {
     DEF_PROPERTY(position_ids_style, position_ids_style_)               \
     DEF_PROPERTY(rotary_embedding_base, rotary_embedding_base_)         \
     DEF_PROPERTY(rotary_embedding_scale, rotary_embedding_scale_)       \
-    DEF_PROPERTY(dynamic_embedding_max_pos, dynamic_embedding_max_pos_) \
     DEF_PROPERTY(org_embedding_max_pos, org_embedding_max_pos_)         \
-    DEF_PROPERTY(base_scale, base_scale_)                               \
+    DEF_PROPERTY(rotary_factor1, rotary_factor1_)                       \
+    DEF_PROPERTY(rotary_factor2, rotary_factor2_)                       \
     DEF_PROPERTY(input_embedding_scalar, input_embedding_scalar_)       \
     DEF_PROPERTY(use_norm_input_residual, use_norm_input_residual_)     \
     DEF_PROPERTY(use_norm_attn_out_residual, use_norm_attn_out_residual_) \
@@ -197,12 +237,14 @@ void registerGptInitParameter(py::module m) {
     DEF_PROPERTY(special_tokens, special_tokens_)                       \
     DEF_PROPERTY(quant_algo, quant_algo_)                               \
     DEF_PROPERTY(use_logn_attn, use_logn_attn_)                         \
-    DEF_PROPERTY(logn_seq_len, logn_seq_len_)                           \
     DEF_PROPERTY(q_scaling, q_scaling_)                                 \
     DEF_PROPERTY(qk_norm, qk_norm_)                                     \
     DEF_PROPERTY(use_cross_attn, use_cross_attn_)                       \
     DEF_PROPERTY(cross_attn_input_len, cross_attn_input_len_)           \
     DEF_PROPERTY(is_multimodal, is_multimodal_)                         \
+    DEF_PROPERTY(mm_sep_tokens, mm_sep_tokens_)                         \
+    DEF_PROPERTY(include_sep_tokens, include_sep_tokens_)               \
+    DEF_PROPERTY(cal_mm_tokens_in_rotary_emb, cal_mm_tokens_in_rotary_emb_) \
     DEF_PROPERTY(pre_allocate_op_mem, pre_allocate_op_mem_)             \
     DEF_PROPERTY(seq_size_per_block, seq_size_per_block_)               \
     DEF_PROPERTY(block_nums, block_nums_)                               \
@@ -211,6 +253,8 @@ void registerGptInitParameter(py::module m) {
     DEF_PROPERTY(reserve_runtime_mem_mb, reserve_runtime_mem_mb_)       \
     DEF_PROPERTY(reuse_cache, reuse_cache_)                             \
     DEF_PROPERTY(enable_partial_fallback, enable_partial_fallback_)     \
+    DEF_PROPERTY(enable_fast_gen, enable_fast_gen_)                     \
+    DEF_PROPERTY(fast_gen_max_context_len, fast_gen_max_context_len_)   \
     DEF_PROPERTY(int8_kv_cache, int8_kv_cache_)                         \
     DEF_PROPERTY(is_causal, is_causal_)                                 \
     DEF_PROPERTY(use_medusa, use_medusa_)                               \
@@ -221,7 +265,8 @@ void registerGptInitParameter(py::module m) {
     DEF_PROPERTY(tp_rank, tp_rank_)                                     \
     DEF_PROPERTY(use_rpc, use_rpc_)                                     \
     DEF_PROPERTY(use_kvcache, use_kvcache_)                             \
-    DEF_PROPERTY(use_expert_attention, use_expert_attention_)
+    DEF_PROPERTY(use_expert_attention, use_expert_attention_)           \
+    DEF_PROPERTY(local_rank, local_rank_)
 
     pybind11::class_<GptInitParameter>(m, "GptInitParameter")
     .def(pybind11::init<int64_t,     // head_num
@@ -235,7 +280,8 @@ void registerGptInitParameter(py::module m) {
     .def("setLayerNormType", &GptInitParameter::setLayerNormType)
     .def("setNormType", &GptInitParameter::setNormType)
     .def("setActivationType", &GptInitParameter::setActivationType)
-    .def("isGatedActivation", &GptInitParameter::isGatedActivation)  REGISTER_PROPERTYS;
+    .def("setTaskType", &GptInitParameter::setTaskType)
+    .def("isGatedActivation", &GptInitParameter::isGatedActivation)  REGISTER_PROPERTYS;    
 }
 
 }

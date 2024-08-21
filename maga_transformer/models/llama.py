@@ -78,26 +78,37 @@ class Llama(GPT):
         config.rotary_embedding_base = config_json.get('rope_theta', 10000)
         config.rotary_embedding_dim = config.size_per_head
         config.tie_word_embeddings = config_json.get('tie_word_embeddings', False)
-        if config_json.get('rope_scaling', None):
-            config.rotary_embedding_scale = config_json['rope_scaling']['factor']
-            config.dynamic_embedding_max_pos = config_json.get('max_position_embeddings', 2048)
-            if config_json['rope_scaling']['type'] == 'dynamic':
-                config.rotary_embedding_style = 1
-            elif config_json['rope_scaling']['type'] == 'linear':
+        rope_scaling = config_json.get('rope_scaling')
+        if rope_scaling is not None:
+            rope_type = rope_scaling.get('type', rope_scaling.get('rope_type'))
+            if rope_type == 'linear':
+                config.rotary_embedding_scale = rope_scaling['factor']
+                config.org_embedding_max_pos = config_json.get('max_position_embeddings', 2048)
+            elif rope_type == 'dynamic':
+                config.rotary_embedding_style = 3
+            elif rope_type == 'yarn':
                 config.rotary_embedding_style = 5
-            elif config_json['rope_scaling']['type'] == 'yarn':
+                config.rotary_embedding_scale = rope_scaling['factor']
+                config.rotary_factor1 = rope_scaling.get('beta_slow', 1)
+                config.rotary_factor2 = rope_scaling.get('beta_fast', 32)
+                config.org_embedding_max_pos = rope_scaling['original_max_position_embeddings']
+            elif rope_type == 'llama3':
                 config.rotary_embedding_style = 6
-                config.org_embedding_max_pos = config_json['rope_scaling']['original_max_position_embeddings']
+                config.rotary_embedding_scale = rope_scaling['factor']
+                config.rotary_factor1 = rope_scaling['low_freq_factor']
+                config.rotary_factor2 = rope_scaling['high_freq_factor']
+                config.org_embedding_max_pos = rope_scaling['original_max_position_embeddings']
             else:
-                raise Exception(f"unsupport rope_scaling {config_json['rope_scaling']}")
+                raise Exception(f"unsupport rope_scaling {rope_scaling}")
         # config.activation_type = config_json.get("hidden_act", config.activation_type)
         config.special_tokens.bos_token_id = config_json['bos_token_id']
-        config.special_tokens.eos_token_id = config_json['eos_token_id']
-        use_logn_attn = config_json.get("use_logn_attn")
-        if (use_logn_attn):
-            config.use_logn_attn = True
-            config.logn_seq_len = config_json.get("seq_length")
-        
+        eos_token_id = config_json['eos_token_id']
+        # openai endpoint will get corrent eos token id list from tokenizer
+        if isinstance(eos_token_id, list):
+            config.special_tokens.eos_token_id = eos_token_id[0]
+        else:
+            config.special_tokens.eos_token_id = eos_token_id
+        config.use_logn_attn = config_json.get("use_logn_attn", False)
 
     @staticmethod
     def from_params(config: GptInitModelParameters, params_json: Dict[str, Any]):
@@ -122,10 +133,10 @@ class Llama(GPT):
     def get_tokenizer(cls, config: GptInitModelParameters):
         tokenizer_config_file = os.path.join(config.tokenizer_path, "tokenizer_config.json")
         if os.path.exists(tokenizer_config_file):
-            logging.info("llama load super tokenzier")
+            logging.info("load super tokenzier")
             return super().get_tokenizer(config)
         else:
-            logging.info("llamaload LlamaTokenizer")
+            logging.info("load LlamaTokenizer")
             return LlamaTokenizer.from_pretrained(config.tokenizer_path)
 
 class Baichuan(Llama):

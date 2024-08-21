@@ -382,8 +382,6 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
     cudaDataType_t      scaleType;
     float               alpha_float = 1.0f;
     float               beta_float  = 0.0f;
-    half                alpha_half  = half(1.0f);
-    half                beta_half   = half(0.0f);
     void *              alpha, *beta;
 
     // int is_fp16_computeType = computeType_ == CUDA_R_16F ? 1 : 0;
@@ -866,7 +864,7 @@ std::pair<bool, cublasLtMatmulAlgo_t> cublasMMWrapper::findBestAlgo(cublasLtHand
                                                                     cublasLtMatrixLayout_t Ddesc,
                                                                     cudaStream_t           stream) {
 #if (CUBLAS_VERSION) <= 11402
-    FT_CHECK_WITH_INFO(false, "CUBLAS version too low.");
+    FT_FAIL("CUBLAS version too low.");
     return {false, cublasLtMatmulAlgo_t{}};
 #else
     size_t returnSize;
@@ -1045,7 +1043,7 @@ void cublasMMWrapper::_Int8Gemm(const int     m,
      *  - 1: int8 * int8 -> int32 -> int32
      */
 #if (CUBLAS_VERSION) <= 11402
-    FT_CHECK_WITH_INFO(false, "CUBLAS version too low.");
+    FT_FAIL("CUBLAS version too low.");
 #else
 
     mu_->lock();

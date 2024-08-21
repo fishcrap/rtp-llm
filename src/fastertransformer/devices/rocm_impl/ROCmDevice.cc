@@ -19,6 +19,9 @@
 #include "src/fastertransformer/kernels/alpha_layernorm_kernels.h"
 #include "src/fastertransformer/kernels/rmsnormKernels.h"
 
+#include "src/fastertransformer/cuda/nccl/nccl_utils_torch.h"
+#include "src/fastertransformer/cuda/nccl/nccl_utils.h"
+
 // TODO(rocm): Idealy we just link compiler_rt for this symbol.
 extern "C" half __truncdfhf2(double a) {
     return (half)(float)a;
@@ -33,14 +36,48 @@ ROCmDevice::ROCmDevice(const DeviceInitParams& params): DeviceBase(params) {
     HIP_CHECK(hipSetDevice(params.device_id));  // TODO(rocm): ensure this is setup every op
     HIP_CHECK(hipStreamCreate(&stream_));
     check_hip_error(hipGetDeviceProperties(&rocmDevProp, device_id_));
-    allocator_.reset(new Allocator<AllocatorType::ROCM>());
-    hostAllocator_.reset(new Allocator<AllocatorType::ROCM_HOST>());
 
+    if (params.tp_size > 1) {
+        const auto rank = params.tp_rank;
+        const auto world_size = params.tp_size;
+
+        nccl_param_.rank_ = rank;
+        nccl_param_.world_size_ = world_size;
+        auto tcpStore = createTcpStore(
+            params.master_ip, params.master_port, world_size, rank);
+        const auto nccl_id = &(nccl_param_.nccl_uid_);
+
+        const std::string tp_group_name = "RTP_LLM_TP_GROUP_";
+        if (rank == 0) {
+            FT_LOG_INFO("rank %d creates nccl uid in group %s.", rank, tp_group_name.c_str());
+            NCCLCHECK(ncclGetUniqueId(nccl_id));
+            setUniqueId(nccl_id, tp_group_name, tcpStore);
+        } else {
+            FT_LOG_INFO("rank %d get nccl uid in group %s.", rank, tp_group_name.c_str());
+            getUniqueId(nccl_id, tp_group_name, tcpStore);
+        }
+
+        FT_LOG_INFO("Initialize NCCL communicators rank %d of %d.", rank, world_size);
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclCommInitRank(&nccl_param_.nccl_comm_, world_size, *nccl_id, rank));
+        NCCLCHECK(ncclGroupEnd());
+    }    
+    
+    // Initialize custom all reduce communicator
+    // Note: custom all reduce communicator will allocate cuda mem through cudaMalloc, it must be called before allocator init
+    if (nccl_param_.world_size_ > 1) {
+        FT_LOG_INFO("Initialize custom all reduce communicator rank %d of %d", nccl_param_.rank_, nccl_param_.world_size_);
+        std::vector<int> tp_ranks = fcNcclGatherRanks(nccl_param_, stream_);
+        custom_allreduce_comm_ = initCustomAllReduceComm(nccl_param_, tp_ranks, stream_);
+    }
+
+    auto allocator_ptr     = new Allocator<AllocatorType::ROCM>();
+    auto hostAllocator_ptr = new Allocator<AllocatorType::ROCM_HOST>();
     if (params.device_reserve_memory_bytes) {
         size_t free_bytes, total_bytes;
         HIP_CHECK(hipMemGetInfo(&free_bytes, &total_bytes));
         TrackerAllocatorParams tracker_params;
-        tracker_params.real_allocator     = allocator_.get();  // TODO(rocm): leak?
+        tracker_params.real_allocator     = allocator_ptr;
         tracker_params.target_track_bytes = params.device_reserve_memory_bytes > 0 ?
                                                 params.device_reserve_memory_bytes :
                                                 free_bytes + params.device_reserve_memory_bytes;
@@ -50,6 +87,8 @@ ROCmDevice::ROCmDevice(const DeviceInitParams& params): DeviceBase(params) {
                     free_bytes,
                     tracker_params.target_track_bytes);
         allocator_.reset(new TrackerAllocator(tracker_params));
+    } else {
+        allocator_.reset(allocator_ptr);
     }
 
     if (params.host_reserve_memory_bytes) {
@@ -57,17 +96,19 @@ ROCmDevice::ROCmDevice(const DeviceInitParams& params): DeviceBase(params) {
                               "rocm host memory can not reserve as much as possible (%lu), must specify concrete size.",
                               params.host_reserve_memory_bytes);
         TrackerAllocatorParams tracker_params;
-        tracker_params.real_allocator     = hostAllocator_.release();
+        tracker_params.real_allocator     = hostAllocator_ptr;
         tracker_params.target_track_bytes = params.host_reserve_memory_bytes;
         tracker_params.align_size         = 32;
         hostAllocator_.reset(new TrackerAllocator(tracker_params));
+    } else {
+        hostAllocator_.reset(hostAllocator_ptr);
     }
 
     check_hip_error(hipGetDeviceProperties(&device_prop_, device_id_));
 
     hipblasCreate(&hipblas_handle_);
     hipblasLtCreate(&hipblaslt_handle_);
-    
+
     hipblas_algo_map_.reset(new hipblasAlgoMap(GEMM_CONFIG));
     hipblas_mm_wrapper_.reset(new hipblasMMWrapper(hipblas_handle_,
                                                    hipblaslt_handle_,
@@ -82,6 +123,7 @@ ROCmDevice::ROCmDevice(const DeviceInitParams& params): DeviceBase(params) {
 
     fmha_runner_.reset(new rocmFmhaWrapper());
     fmha_runner_->init(stream_);
+    moe_runner_.reset(new rocmMoeWrapper());
 }
 
 ROCmDevice::~ROCmDevice() {
@@ -93,6 +135,10 @@ ROCmDevice::~ROCmDevice() {
 
     if (stream_ != nullptr) {
         HIP_CHECK(hipStreamDestroy(stream_));
+    }
+
+    if (nccl_param_.nccl_comm_) {
+        ncclCommDestroy(nccl_param_.nccl_comm_);
     }
 }
 
@@ -107,6 +153,8 @@ DeviceProperties ROCmDevice::getDeviceProperties() {
     DeviceProperties props;
     props.type = DeviceType::ROCm;
     props.id   = device_id_;
+    props.tp_rank = nccl_param_.rank_;
+    props.tp_size = nccl_param_.world_size_;
     return props;
 }
 
@@ -177,6 +225,13 @@ void ROCmDevice::syncAndCheck() {
     (void)hipDeviceSynchronize();
 }
 
+void ROCmDevice::syncCommunication(bool timeout) {
+    if (nccl_param_.world_size_ > 1) {
+        FT_LOG_DEBUG("Synchronize NCCL communicators rank %d of %d.", nccl_param_.rank_, nccl_param_.world_size_);
+        ftNcclStreamSynchronize(nccl_param_, stream_, timeout);
+    }
+}
+
 SelectOutput ROCmDevice::select(const SelectParams& params) {
     if ((params.input.where() != MemoryType::MEMORY_GPU) || (params.dim > 0)) {
         return DeviceBase::select(params);
@@ -226,6 +281,7 @@ BufferPtr ROCmDevice::embeddingLookup(const EmbeddingLookupParams& params) {
                                      tokens.data<int>(),
                                      position_ids.has_value() ? position_ids.value().get().data<int>() : nullptr,
                                      token_types.has_value() ? token_types.value().get().data<int>() : nullptr,
+                                     nullptr, //mask
                                      token_num,
                                      hidden_size,
                                      stream_);
@@ -251,7 +307,7 @@ LayernormOutput ROCmDevice::layernorm(const LayernormParams& params) {
 
     if (!params.is_inplace && params.qscheme == QScheme::NoQuantize) {
         norm_output = allocateBufferLike(*params.input);
-    } else if (params.qscheme == Qint8PerChannelLastAxis) {
+    } else if (params.qscheme == Qint8PerToken) {
         auto kernel = allocateBuffer({DataType::TYPE_INT8,
                                             {input->shape()},
                                             AllocationType::DEVICE},
@@ -363,6 +419,7 @@ LayernormOutput ROCmDevice::layernorm(const LayernormParams& params) {
         if (params.norm_type == NormType::layernorm) {
             DISPATCH_CUDA_FUNCTION_DATA_TYPE(data_type,
                                              invokeGeneralLayerNorm,
+                                             nullptr,
                                              norm_output->data(),
                                              input->data(),
                                              gamma,
@@ -481,6 +538,76 @@ DeviceStatus ROCmDevice::getDeviceStatus() {
     status.device_memory_status.available_bytes = status.device_memory_status.free_bytes + status.device_memory_status.preserved_bytes;
 
     return status;
+}
+
+static float cpu_half2float(uint16_t h) {
+    unsigned sign     = ((((uint16_t)h) >> 15) & 1);
+    unsigned exponent = ((((uint16_t)h) >> 10) & 0x1f);
+    unsigned mantissa = ((((uint16_t)h) & 0x3ff) << 13);
+
+    if (exponent == 0x1f) { /* NaN or Inf */
+        mantissa = (mantissa ? (sign = 0, 0x7fffff) : 0);
+        exponent = 0xff;
+    } else if (!exponent) { /* Denorm or Zero */
+        if (mantissa) {
+            unsigned int msb;
+            exponent = 0x71;
+            do {
+                msb = (mantissa & 0x400000);
+                mantissa <<= 1; /* normalize */
+                --exponent;
+            } while (!msb);
+            mantissa &= 0x7fffff; /* 1.mantissa is implicit */
+        }
+    } else {
+        exponent += 0x70;
+    }
+
+    int temp = ((sign << 31) | (exponent << 23) | mantissa);
+    return *((float*)((void*)&temp));
+}
+void ROCmDevice::printBuffer(const BufferPtr b) {
+    BufferPtr hb = b;
+    if (b.get()->where() == MemoryType::MEMORY_GPU) {
+        hb = clone({*b, AllocationType::HOST});
+    }
+
+    if (b.get()->type() == DataType::TYPE_FP16) {
+        printf("%s", hb.get()->debugString().c_str());
+        uint16_t* phb = (uint16_t*)(hb.get()->data());
+        for (uint32_t i = 0; i < hb.get()->size(); i++) {
+            if (i % hb.get()->shape()[0] == 0)
+                printf("\n");
+            uint16_t val = phb[i];
+            printf("%.2e, ", cpu_half2float(val));
+        }
+        printf("\n");
+    } else if (b.get()->type() == DataType::TYPE_INT4X2) {
+        printf("%s", hb.get()->debugString().c_str());
+        uint16_t* phb = (uint16_t*)(hb.get()->data());
+        for (uint32_t i = 0; i < hb.get()->size(); i++) {
+            if (i % (hb.get()->shape()[0] / 2) == 0)
+                printf("\n");
+            uint8_t val = phb[i];
+            printf("%d, %d, ", (val & 0x0F), ((val & 0xF0) >> 4));
+        }
+        printf("\n");
+    } else if (b.get()->type() == DataType::TYPE_QINT4X2) {
+        const QBuffer& qb = reinterpret_cast<const QBuffer&>(*hb);
+
+        size_t kernel_dim0 = qb.kernel().shape()[0];
+        size_t scales_dim0 = qb.scales().shape()[0];
+        size_t group_size  = (kernel_dim0 / scales_dim0);
+
+        printf("QBuffer( group_size = %d\n [\n", group_size);
+        printf("   kernel: ");
+        printBuffer(BufferPtr(new Buffer(qb.kernel())));
+        printf("   scales: ");
+        printBuffer(BufferPtr(new Buffer(qb.scales())));
+        printf("   zeros: ");
+        printBuffer(BufferPtr(new Buffer(qb.zeros())));
+        printf("])\n");
+    }
 }
 
 RTP_LLM_REGISTER_DEVICE(ROCm);

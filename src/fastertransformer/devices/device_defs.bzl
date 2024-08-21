@@ -1,4 +1,5 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
 
 def device_linkopts():
     return select({
@@ -42,7 +43,7 @@ def device_impl_target():
             "//src/fastertransformer/devices/cuda_impl:cuda_impl",
             "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_impl",
             "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_impl",
-            "//3rdparty/flash_attention2:flash_attention2_impl",
+            "@flash_attention//:flash_attention2_impl",
         ],
         "//:using_rocm": [
             "//src/fastertransformer/devices/rocm_impl:rocm_impl",

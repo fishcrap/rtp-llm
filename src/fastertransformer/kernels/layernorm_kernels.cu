@@ -38,6 +38,11 @@ __device__ __forceinline__ int64_t loadOffset(int head_num,
     return offset;
 }
 
+__device__ __forceinline__ int64_t loadOffsetStrided(const int stride, const int n_elems)
+{
+    return blockIdx.x * stride / n_elems;
+}
+
 template<typename T>
 __global__ void qkLayerNorm(T* __restrict qkv,
                             const T* __restrict gamma,
@@ -96,6 +101,66 @@ __global__ void qkLayerNorm(T* __restrict qkv,
 }
 
 template<typename T>
+__global__ void layerNormWithStride(T* __restrict data,
+                            const T* __restrict gamma,
+                            const T* __restrict beta,
+                            const float layernorm_eps,
+                            const int n,
+                            const int stride)
+{
+    constexpr auto num_elems_T = num_elems<T>::value;
+    constexpr size_t warp_size = 32;
+    const int n_elems = n / num_elems_T / warp_size;
+    using float_packed_t = typename packed_as<float, num_elems_T>::type;
+
+    const int tid = threadIdx.x;
+
+    __shared__ float s_mean;
+    __shared__ float s_variance;
+    float            mean     = 0.0f;
+    float            variance = 0.0f;
+
+    float local_sum = 0.0f;
+#pragma unroll
+    for (int i = 0; i < n_elems; i++) {
+        auto index = loadOffsetStrided(stride, num_elems_T) + tid * n_elems + i;
+        auto val_f = cuda_cast<float_packed_t>(ldg(&data[index]));
+	    local_sum += cuda_sum<float>(val_f);
+    }
+
+    mean = warpReduceSum(local_sum);
+
+    if (threadIdx.x == 0) {
+        s_mean = mean / n;
+    }
+    __syncthreads();
+
+    float local_var_sum = 0.0f;
+#pragma unroll
+    for (int i = 0; i < n_elems; i++) {
+        auto index = loadOffsetStrided(stride, num_elems_T) + tid * n_elems + i;
+        auto val_f = cuda_cast<float_packed_t>(ldg(&data[index]));
+        auto diff = val_f - s_mean;
+        local_var_sum += cuda_sum<float>(diff * diff);
+    }
+    variance = warpReduceSum(local_var_sum);
+
+    if (threadIdx.x == 0) {
+        s_variance = rsqrtf(variance / n + layernorm_eps);
+    }
+    __syncthreads();
+#pragma unroll
+    for (int i = 0; i < n_elems; i++) {
+        auto index = loadOffsetStrided(stride, num_elems_T) + tid * n_elems + i;
+        auto gamma_index = tid * n_elems + i;
+        auto val_f = cuda_cast<float_packed_t>(ldg(&data[index]));
+        auto val_gamma = cuda_cast<float_packed_t>(gamma[gamma_index]);
+        auto val_beta = cuda_cast<float_packed_t>(beta[gamma_index]);
+        data[index] = cuda_cast<T>((val_f - s_mean) * s_variance * val_gamma + val_beta);        
+    }
+}
+
+template<typename T>
 void invokeQkLayerNorm(T* __restrict qkv,
 		       const T* __restrict gamma,
 		       const float layernorm_eps,
@@ -120,6 +185,32 @@ void invokeQkLayerNorm(T* __restrict qkv,
 						layernorm_eps, total_head_num, size_per_head);
 }
 
+template<typename T>
+void invokeLayerNormWithStride(T* __restrict data,
+                               const T* __restrict gamma,
+                               const T* __restrict beta,
+                               const float  layernorm_eps,
+                               const int    m,
+                               const int    n,
+                               const int    stride,
+                               const int    offset,
+                               cudaStream_t stream)
+{
+    constexpr size_t vec_size = 2;
+    constexpr size_t warp_size = 32;
+    data = data + offset;
+    if (n % (warp_size * vec_size) != 0) {
+        throw std::invalid_argument("not supported size_per_head: " + std::to_string(n));
+    }
+    dim3 grid(m);
+    dim3 block(32);
+
+    using Tp = typename packed_as<T, vec_size>::type;
+    layerNormWithStride<Tp><<<grid, block, 0, stream>>>(reinterpret_cast<Tp*>(data), reinterpret_cast<const Tp*>(gamma),
+                        reinterpret_cast<const Tp*>(beta),
+						layernorm_eps, n, stride);
+}
+
 #define INSTANTIATE_QK_LAYERNORM(T)				\
   template void invokeQkLayerNorm(T* __restrict qkv,		\
 				  const T* __restrict gamma,	\
@@ -134,7 +225,24 @@ INSTANTIATE_QK_LAYERNORM(half);
 #ifdef ENABLE_BF16
 INSTANTIATE_QK_LAYERNORM(__nv_bfloat16);
 #endif
+#undef INSTANTIATE_QK_LAYERNORM
 
+#define INSTANTIATE_STRIDED_LAYERNORM(T)                                                                               \
+    template void invokeLayerNormWithStride(T* __restrict data,                                                        \
+                                            const T* __restrict gamma,                                                 \
+                                            const T* __restrict beta,                                                  \
+                                            const float  layernorm_eps,                                                \
+                                            const int    m,                                                            \
+                                            const int    n,                                                            \
+                                            const int    stride,                                                       \
+                                            const int    offset,                                                       \
+                                            cudaStream_t stream);
+INSTANTIATE_STRIDED_LAYERNORM(float);
+INSTANTIATE_STRIDED_LAYERNORM(half);
+#ifdef ENABLE_BF16
+INSTANTIATE_STRIDED_LAYERNORM(__nv_bfloat16);
+#endif
+#undef INSTANTIATE_STRIDED_LAYERNORM
 
 template <typename Tf, typename T, bool IS_BETA>
 __inline__ __device__ Tf compute_layernorm(Tf val, float s_mean, float s_variance, const T* gamma, const T* beta, int i)
@@ -203,7 +311,7 @@ __global__ void generalLayerNorm(T* output, T* normed_output, const T* input, co
     {
         // const T val = input[bidx * n_elems + i];
         const int index = bidx * n_elems + i;
-        T val = cuda_cast<T>(0.0f);
+        T val = input[index];
         // const T val = input[index];
         if (IS_BIAS)
         {
@@ -213,22 +321,9 @@ __global__ void generalLayerNorm(T* output, T* normed_output, const T* input, co
         {
             val = add(val, ldg(&residual[index]));
         }
-        if (IS_OUTPUT)
+        if (IS_OUTPUT && !RETURN_NORMED_OUTPUT)
         {
-            T in_val;
-            if (with_per_tensor_scaling)
-            {
-                in_val = cuda_cast<T>(cuda_cast<float_packed_t>(reinterpret_cast<const Int32_Packed_T*>(input)[index])
-                    * scale_orig_quant);
-            }
-            else
-            {
-                in_val = input[index];
-            }
-            val = add(val, in_val);
-            if (!RETURN_NORMED_OUTPUT) {
-                output[index] = val;
-            }
+            output[index] = val;
         }
         shmem[i] = val;
 
@@ -290,6 +385,7 @@ __global__ void generalLayerNorm(T* output, T* normed_output, const T* input, co
         if (RETURN_NORMED_OUTPUT && IS_OUTPUT) {
             output[index] = val;
         }
+
         if (with_per_token_scaling)
         {
             amax = cuda_max(cuda_max<T_scalar, T>(cuda_abs(val)), amax);
@@ -465,7 +561,7 @@ void dispatch_layernorm_output(T* output, T* normed_output, const T* input, cons
 }
 
 template <typename T>
-void invokeGeneralLayerNorm(T* out, const T* input, const T* gamma, const T* beta, const float eps, const int tokens,
+void invokeGeneralLayerNorm(T* out, T* normed_output, const T* input, const T* gamma, const T* beta, const float eps, const int tokens,
     const int hidden_dim, cudaStream_t stream, bool use_diff_of_squares, const float* scale, float* dynamic_scale,
     int8_t* out_quant, bool return_normed_output)
 {
@@ -486,15 +582,15 @@ void invokeGeneralLayerNorm(T* out, const T* input, const T* gamma, const T* bet
     if (use_vec_type)
     {
         using Tp = typename packed_as<T, vec_size>::type;
-        dispatch_layernorm_output(reinterpret_cast<Tp*>(out), reinterpret_cast<Tp*>(out),
-            reinterpret_cast<const Tp*>(out), (const Tp*) nullptr, reinterpret_cast<const Tp*>(input),
+        dispatch_layernorm_output(reinterpret_cast<Tp*>(out), reinterpret_cast<Tp*>(normed_output),
+            reinterpret_cast<const Tp*>(input), (const Tp*) nullptr, (const Tp*) nullptr,
             reinterpret_cast<const Tp*>(gamma), reinterpret_cast<const Tp*>(beta), eps, tokens, hidden_dim, scale,
-            dynamic_scale, out_quant, grid, block, shmem_size, stream, use_diff_of_squares, false, return_normed_output);
+            dynamic_scale, out_quant, grid, block, shmem_size, stream, use_diff_of_squares, out != nullptr, return_normed_output);
     }
     else
     {
-        dispatch_layernorm_output(out, out, (const T*) out, (const T*) nullptr, input, gamma, beta, eps, tokens,
-            hidden_dim, scale, dynamic_scale, out_quant, grid, block, shmem_size, stream, use_diff_of_squares, false, return_normed_output);
+        dispatch_layernorm_output(out, normed_output, (const T*) input, (const T*) nullptr, (const T*) nullptr, gamma, beta, eps, tokens,
+            hidden_dim, scale, dynamic_scale, out_quant, grid, block, shmem_size, stream, use_diff_of_squares, out != nullptr, return_normed_output);
     }
 }
 
@@ -533,9 +629,9 @@ void invokeGeneralAddBiasResidualLayerNorm(T* out, T* norm_output, const T* inpu
     }
 }
 
-#define INSTANTIATE_GENERAL_LAYERNORM(T)                                                                               \
-    template void invokeGeneralLayerNorm(T* out, const T* input, const T* gamma, const T* beta, const float eps,       \
-        const int tokens, const int hidden_dim, cudaStream_t stream, bool use_diff_of_squares, const float* scale,     \
+#define INSTANTIATE_GENERAL_LAYERNORM(T)                                                                                                 \
+    template void invokeGeneralLayerNorm(T* out, T* normed_output, const T* input, const T* gamma, const T* beta, const float eps,       \
+        const int tokens, const int hidden_dim, cudaStream_t stream, bool use_diff_of_squares, const float* scale,                       \
         float* dynamic_scale, int8_t* out_quant, bool return_normed_output);
 
 INSTANTIATE_GENERAL_LAYERNORM(float);

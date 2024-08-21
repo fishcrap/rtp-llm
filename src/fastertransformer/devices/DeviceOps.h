@@ -20,12 +20,16 @@ public:
 
     // basic compuation ops
     virtual LayernormOutput layernorm(const LayernormParams& params);
+    virtual AddBiasOutput addbias(const AddBiasParams& params);
     virtual BufferPtr gemm(const GemmParams& params);
     virtual GroupedGemmOutput groupedGemm(const GroupedGemmParams& params);
     virtual MultiplyOutput multiply(const MultiplyParams& params);
     virtual BufferPtr embeddingLookup(const EmbeddingLookupParams& params);
+    virtual BufferPtr multimodalEmbedding(const MultimodalEmbeddingParams& params);
     virtual void activation(const ActivationParams& params);
     virtual BufferPtr softmax(const SoftmaxParams& params);
+    virtual LossOutput loss(const LossParams& params);
+    virtual MaskOutput attentionMask(const MaskParams& params);
 
     // dedicated attention ops
     virtual AttentionModuleOutput contextAttention(const AttentionModuleParams& params);
@@ -43,8 +47,11 @@ public:
 
     // for device communication
     virtual void broadcast(const BroadcastParams& params);
-    virtual void allReduce(const AllReduceParams& params);
+    virtual AllReduceOutput allReduce(const AllReduceParams& params);
     virtual void allGather(const AllGatherParams& params);
+    virtual PrepareAllReduceOutput prepareAllReduce(const PrepareAllReduceParams& params) {
+        return PrepareAllReduceOutput{params.buffer};
+    };
 
     virtual BufferPtr quantize(const QuantizeParams& params);
 };

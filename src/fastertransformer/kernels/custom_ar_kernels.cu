@@ -16,6 +16,9 @@
 
 #include "custom_ar_kernels.h"
 #include "src/fastertransformer/cuda/cuda_type_utils.cuh"
+#if USING_ROCM
+#include "src/fastertransformer/rocm/cuda_shims.h"
+#endif
 #include <cstddef>
 
 namespace fastertransformer {
@@ -24,9 +27,14 @@ namespace fastertransformer {
 
 static inline __device__ uint32_t hadd2(const uint32_t& a, const uint32_t& b)
 {
+    #if USING_ROCM
+    __half2 out = __hadd2(*reinterpret_cast<const __half2_raw*>(&a), *reinterpret_cast<const __half2_raw*>(&b));
+    return *reinterpret_cast<uint32_t*>(&(out.data));
+    #else
     uint32_t c;
     asm volatile("add.f16x2 %0, %1, %2;\n" : "=r"(c) : "r"(a), "r"(b));
     return c;
+    #endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -34,7 +42,11 @@ static inline __device__ uint32_t hadd2(const uint32_t& a, const uint32_t& b)
 static inline __device__ uint32_t fadd(const uint32_t& a, const uint32_t& b)
 {
     uint32_t c;
+    #if USING_ROCM
+    c = __float_as_uint ( __uint_as_float(a) + __uint_as_float(b) );
+    #else
     asm volatile("add.f32 %0, %1, %2;\n" : "=r"(c) : "r"(a), "r"(b));
+    #endif
     return c;
 }
 
@@ -42,23 +54,31 @@ static inline __device__ uint32_t fadd(const uint32_t& a, const uint32_t& b)
 
 static inline __device__ void st_flag_release(uint32_t& flag, uint32_t* flag_addr)
 {
-#if __CUDA_ARCH__ >= 700
-    asm volatile("st.global.release.sys.b32 [%1], %0;" ::"r"(flag), "l"(flag_addr));
-#else
-    __threadfence_system();
-    asm volatile("st.global.volatile.b32 [%1], %0;" ::"r"(flag), "l"(flag_addr));
-#endif
+    #if USING_ROCM 
+    __atomic_store((__attribute__((address_space(1))) uint32_t*)flag_addr, (__attribute__((address_space(1))) uint32_t*)&flag, __ATOMIC_RELEASE);
+    #else
+    #if __CUDA_ARCH__ >= 700
+        asm volatile("st.global.release.sys.b32 [%1], %0;" ::"r"(flag), "l"(flag_addr));
+    #else
+        __threadfence_system();
+        asm volatile("st.global.volatile.b32 [%1], %0;" ::"r"(flag), "l"(flag_addr));
+    #endif
+    #endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static inline __device__ void ld_flag_acquire(uint32_t& flag, uint32_t* flag_addr)
 {
-#if __CUDA_ARCH__ >= 700
-    asm volatile("ld.global.acquire.sys.b32 %0, [%1];" : "=r"(flag) : "l"(flag_addr));
-#else
-    asm volatile("ld.global.volatile.b32 %0, [%1];" : "=r"(flag) : "l"(flag_addr));
-#endif
+    #if USING_ROCM 
+    __atomic_load((__attribute__((address_space(1))) uint32_t*)flag_addr, &flag, __ATOMIC_ACQUIRE);
+    #else
+    #if __CUDA_ARCH__ >= 700
+        asm volatile("ld.global.acquire.sys.b32 %0, [%1];" : "=r"(flag) : "l"(flag_addr));
+    #else
+        asm volatile("ld.global.volatile.b32 %0, [%1];" : "=r"(flag) : "l"(flag_addr));
+    #endif
+    #endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -100,6 +120,7 @@ inline __device__ uint4 add128b<uint4, float>(uint4 a, uint4 b)
     return c;
 }
 
+#ifdef ENABLE_BF16
 template<>
 inline __device__ bf168 add128b<bf168, __nv_bfloat16>(bf168 a, bf168 b)
 {
@@ -110,6 +131,7 @@ inline __device__ bf168 add128b<bf168, __nv_bfloat16>(bf168 a, bf168 b)
     c.w = bf16hadd2(a.w, b.w);
     return c;
 }
+#endif
 
 // init 128bits data with 0
 template<typename T>
@@ -150,15 +172,17 @@ static __global__ void oneShotAllReduceKernel(CustomAllReduceParameters params)
     size_t max_offset = std::min((bidx + 1) * params.elts_per_block, params.elts_per_rank);
 
     // Synchronize the ranks.
-    volatile uint32_t* barrier_d = params.peer_barrier_ptrs[params.local_rank];
     if (tidx < RANKS_PER_NODE) {
         // The 1st block notifies the other ranks.
         if (bidx == 0) {
-            params.peer_barrier_ptrs[tidx][params.local_rank] = params.barrier_flag;
+            st_flag_release(params.barrier_flag, params.peer_barrier_ptrs[tidx] + params.local_rank);
         }
-
+        uint32_t* peer_barrier_d = params.peer_barrier_ptrs[params.local_rank] + tidx;
+        uint32_t  rank_barrier   = 0;
         // Busy-wait until all ranks are ready.
-        while (barrier_d[tidx] < params.barrier_flag) {}
+        do {
+            ld_flag_acquire(rank_barrier, peer_barrier_d);
+        } while (rank_barrier != params.barrier_flag);
     }
 
     // Make sure we can move on...
@@ -214,15 +238,18 @@ static __global__ void twoShotAllReduceKernel(CustomAllReduceParameters params)
     size_t max_offset = min(offset + params.elts_per_block, params.elts_total);
 
     // Synchronize the ranks.
-    volatile uint32_t* barrier_d = params.peer_barrier_ptrs[params.local_rank];
+
     if (tidx < RANKS_PER_NODE) {
         // The 1st block notifies the other ranks.
-        if (bidx == 0) {
-            params.peer_barrier_ptrs[tidx][params.local_rank] = params.barrier_flag;
+            if (bidx == 0) {
+            st_flag_release(params.barrier_flag, params.peer_barrier_ptrs[tidx] + params.local_rank);
         }
-
+        uint32_t* peer_barrier_d = params.peer_barrier_ptrs[params.local_rank] + tidx;
+        uint32_t  rank_barrier   = 0;
         // Busy-wait until all ranks are ready.
-        while (barrier_d[tidx] < params.barrier_flag) {}
+        do {
+            ld_flag_acquire(rank_barrier, peer_barrier_d);
+        } while (rank_barrier != params.barrier_flag);
     }
 
     // Make sure we can move on...
@@ -287,7 +314,7 @@ static __global__ void twoShotAllReduceKernel(CustomAllReduceParameters params)
             // use round-robin gathering from other ranks
             int offset_rank = local_offset + (dst_rank[ii] - params.local_rank) * params.elts_per_rank;
             reinterpret_cast<PackedType*>(&((T*)params.local_output_buffer_ptr)[offset_rank])[0] =
-                reinterpret_cast<PackedType*>(&src_d[dst_rank[ii]][offset_rank])[0];
+                reinterpret_cast<PackedType*>(&src_d[ii][offset_rank])[0];
         }
     }
 }
@@ -337,8 +364,11 @@ void kernelLaunchConfig(
             break;
         }
         case 1: {  // two stage all reduce algo
+
+            // TODO(xyz): when elts / MAX_RANKS_PER_NODE % MAX_RANKS_PER_NODE != 0(for example, 100000), 
+            // there exist some bug in custom ar kernel, fix it
             int total_threads = elts / ranks_per_node / ranks_per_node;
-            assert(elts / ranks_per_node % ranks_per_node == 0 && total_threads % WARP_SIZE == 0);
+            assert(elts / MAX_RANKS_PER_NODE % MAX_RANKS_PER_NODE == 0 && total_threads % WARP_SIZE == 0);
 
             while (total_threads % blocks_per_grid != 0 || total_threads / blocks_per_grid > DEFAULT_BLOCK_SIZE) {
                 blocks_per_grid += 1;
@@ -407,11 +437,15 @@ void invokeCustomAllReduceDispatch(CustomAllReduceParameters* param, cudaStream_
 
 // Template instantiation
 
+#ifdef ENABLE_BF16
 INSTANTIATE_GENERAL_CUSTOM_ALL_REDUCE_DISPATCH(__nv_bfloat16)
+#endif
 INSTANTIATE_GENERAL_CUSTOM_ALL_REDUCE_DISPATCH(float)
 INSTANTIATE_GENERAL_CUSTOM_ALL_REDUCE_DISPATCH(half)
 
+#ifdef ENABLE_BF16
 INSTANTIATE_GENERAL_CUSTOM_ALL_REDUCE_KERNEL(__nv_bfloat16)
+#endif
 INSTANTIATE_GENERAL_CUSTOM_ALL_REDUCE_KERNEL(float)
 INSTANTIATE_GENERAL_CUSTOM_ALL_REDUCE_KERNEL(half)
 

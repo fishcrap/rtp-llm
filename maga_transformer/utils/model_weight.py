@@ -2,6 +2,7 @@ import logging
 import math
 import os
 from functools import reduce
+import threading
 import torch
 import torch.serialization
 import functools
@@ -9,6 +10,7 @@ import copy
 from typing import Any, NamedTuple, Callable, List, Dict, Set, Tuple, Optional, Union
 from maga_transformer.utils.database import FinetuneType, TrainType, CkptFileInfo, LoraConfig
 from maga_transformer.config.gpt_init_model_parameters import GptInitModelParameters
+from maga_transformer.distribute.worker_info import g_parallel_info
 from maga_transformer.utils.database import BaseDatabase
 from maga_transformer.utils.RWLock import RWlock
 
@@ -30,10 +32,10 @@ def pad(ts: List[torch.Tensor], inter_padding_size: int, dim: int):
         pad_shape = [ts[0].shape[0], inter_padding_size - ts[0].shape[1]]
     else:
         raise Exception('unknown padding dim: ' + str(dim))
-    if pad_shape[0] == 0 or pad_shape[1] ==0:
-        return ts[0].cpu().contiguous()
-    z = torch.zeros(pad_shape).cpu().to(ts[0].dtype)
-    return torch.cat((ts[0].cpu(), z), dim).to('cpu').contiguous()
+    if pad_shape[0] == 0 or pad_shape[1] == 0:
+        return ts[0].contiguous()
+    z = torch.zeros(pad_shape, device=ts[0].device).to(ts[0].dtype)
+    return torch.cat((ts[0], z), dim).to(ts[0].device).contiguous()
 
 def transpose_pad(ts: List[torch.Tensor], inter_padding_size: int, dim: int):
     if dim == 0:
@@ -42,8 +44,8 @@ def transpose_pad(ts: List[torch.Tensor], inter_padding_size: int, dim: int):
         pad_shape = [ts[0].shape[0], inter_padding_size - ts[0].shape[1]]
     else:
         raise Exception('unknown padding dim: ' + str(dim))
-    z = torch.zeros(pad_shape, device='cpu').half()
-    return torch.cat((ts[0], z), dim).T.to('cpu').contiguous()
+    z = torch.zeros(pad_shape, device=ts[0].device).half()
+    return torch.cat((ts[0], z), dim).T.to(ts[0].device).contiguous()
 
 def b_half_merge(ts: List[torch.Tensor]):
     n_ts_1 = []
@@ -103,105 +105,66 @@ def sp_id(t: torch.Tensor, tp: int, tp_rank: int, **kwargs: Any) -> torch.Tensor
 def stack_(ts: List[torch.Tensor]):
     return torch.stack(ts, dim=0)
 
-def get_sp_tensor(t: torch.Tensor, qkv_hidden_size: int, hidden_size: int, tp: int, tp_rank: int, kv_broadcast: bool):
-    kv_hidden_size = (qkv_hidden_size - hidden_size) // 2
+def get_sp_tensor(t: torch.Tensor, head_num: int, head_num_kv: int, size_per_head: int,
+                  tp: int, tp_rank: int, **kwargs):
+    t = t.reshape([-1, (head_num + head_num_kv * 2) * size_per_head])
+    q_hidden = head_num * size_per_head
+    kv_hidden = head_num_kv * size_per_head
     if len(t.shape) == 1:
         t = t.unsqueeze(0)
-    qs = sp_neg1(t[:,:hidden_size], tp, tp_rank)
-    if kv_broadcast:
-        ks = t[:,hidden_size:hidden_size + kv_hidden_size]
-        vs = t[:,hidden_size + kv_hidden_size:]
+    qs = sp_neg1(t[:,:q_hidden], tp, tp_rank)
+    if head_num_kv == 1:
+        ks = t[:,q_hidden:q_hidden + kv_hidden]
+        vs = t[:,q_hidden + kv_hidden:]
     else:
-        ks = sp_neg1(t[:,hidden_size:hidden_size + kv_hidden_size], tp, tp_rank)
-        vs = sp_neg1(t[:,hidden_size + kv_hidden_size:], tp, tp_rank)
+        ks = sp_neg1(t[:,q_hidden:q_hidden + kv_hidden], tp, tp_rank)
+        vs = sp_neg1(t[:,q_hidden + kv_hidden:], tp, tp_rank)
     return torch.concat([qs, ks, vs], dim=1).contiguous()
 
 # MHA layout: [D, head*size_per_head, head*size_per_head, head*size_per_head] == [D, 3, D] (sp_neg)
 # MQA layout: [D, head*size_per_head, kv_head*size_per_head, kv_head*size_per_head] (sp_head)
-def sp_head(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, qkv_hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
+def sp_head(t: torch.Tensor, hidden_size: int, head_num: int, head_num_kv: int, size_per_head: int,
+            **kwargs: Any) -> torch.Tensor:
     # int4
-    if len(t.shape) ==2 and t.dtype == torch.int32:
+    if len(t.shape) == 2 and t.dtype == torch.int32:
         # awq
-        if t.shape[0] == hidden_size and t.shape[1] == qkv_hidden_size // 8:
-            qkv_hidden_size = qkv_hidden_size // 8
-            hidden_size = hidden_size // 8
-    if len(t.shape) == 2 and qkv_hidden_size != hidden_size * 3:
-        return get_sp_tensor(t, qkv_hidden_size, hidden_size, tp, tp_rank, kv_broadcast)
-    else:
-        splitted = sp_neg1(t.reshape(t.shape[0], 3, t.shape[1] // 3), tp, tp_rank)
-        splitted = splitted.reshape(splitted.shape[0], -1)
-        return splitted
+        if t.shape[0] == hidden_size and t.shape[1] == ((head_num + head_num_kv * 2) * size_per_head) // 8:
+            size_per_head = size_per_head // 8
+    return get_sp_tensor(t,
+                         head_num=head_num,
+                         head_num_kv=head_num_kv,
+                         size_per_head=size_per_head,
+                         **kwargs)
 
-def sp_head_s(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
-    qkv_hidden_size = t.shape[1]
-    if len(t.shape) == 2 and qkv_hidden_size != hidden_size * 3:
-        return get_sp_tensor(t, qkv_hidden_size, hidden_size, tp, tp_rank, kv_broadcast)
-    else:
-        return sp_neg1(t.reshape(t.shape[0], 3, t.shape[1] // 3), tp, tp_rank)
+def sp_head_s(t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    return get_sp_tensor(t, **kwargs)
 
-def get_sp_tensor_gemm8(t: torch.Tensor, qkv_hidden_size: int, hidden_size: int, tp: int, tp_rank: int, kv_broadcast: bool):
-    kv_hidden_size = (qkv_hidden_size - hidden_size) // 2
-    if len(t.shape) == 1:
-        t = t.unsqueeze(0)
-    qs = sp_0(t[:hidden_size, :], tp, tp_rank)
-    if kv_broadcast:
-        ks = t[hidden_size:hidden_size + kv_hidden_size, :]
-        vs = t[hidden_size + kv_hidden_size:, :]
-    else:
-        ks = sp_0(t[hidden_size:hidden_size + kv_hidden_size, :], tp, tp_rank)
-        vs = sp_0(t[hidden_size + kv_hidden_size:, :], tp, tp_rank)
-    return torch.concat([qs, ks, vs], dim=0).contiguous()
+def sp_head_z(t: torch.Tensor, size_per_head: int, **kwargs: Any) -> torch.Tensor:
+    size_per_head = size_per_head // 8
+    return get_sp_tensor(t, size_per_head=size_per_head, **kwargs)
 
-def sp_head_gemm_a8(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, qkv_hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
-    if len(t.shape) == 2 and qkv_hidden_size != hidden_size * 3:
-        return get_sp_tensor_gemm8(t, qkv_hidden_size, hidden_size, tp, tp_rank, kv_broadcast)
-    else:
-        return sp_0(t.reshape(t.shape[0], 3, t.shape[1] // 3), tp, tp_rank)
+def sp_head_b(t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    return get_sp_tensor(t, **kwargs)
 
-def sp_head_s_gemm_a8(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
-    qkv_hidden_size = t.shape[0]
-    if len(t.shape) == 2 and qkv_hidden_size != hidden_size * 3:
-        return get_sp_tensor_gemm8(t, qkv_hidden_size, hidden_size, tp, tp_rank, kv_broadcast)
-    else:
-        return sp_0(t.reshape(t.shape[0], 3, t.shape[1] // 3), tp, tp_rank)
-
-def sp_head_z(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, qkv_hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
-    qkv_hidden_size = qkv_hidden_size // 8
-    hidden_size = hidden_size // 8
-    if len(t.shape) == 2 and qkv_hidden_size != hidden_size * 3:
-        return get_sp_tensor(t, qkv_hidden_size, hidden_size, tp, tp_rank, kv_broadcast)
-    else:
-        return sp_neg1(t.reshape(t.shape[0], 3, t.shape[1] // 3), tp, tp_rank)
-
-def sp_head_b(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
-    t = t.reshape(-1)
-    qkv_hidden_size = t.shape[0]
-    return get_sp_tensor(t, qkv_hidden_size, hidden_size, tp, tp_rank, kv_broadcast)
-
-def sp_head_qk_norm(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
+def sp_head_qk_norm(t: torch.Tensor, tp, tp_rank, head_num, head_num_kv, size_per_head, **kwargs: Any) -> torch.Tensor:
+    q_hidden = head_num * size_per_head
     t = t.reshape(1, -1)
-    qs = sp_neg1(t[:,:hidden_size], tp, tp_rank)
-    if kv_broadcast:
-        ks = t[:,hidden_size:]
+    qs = sp_neg1(t[:,:q_hidden], tp, tp_rank)
+    if head_num_kv == 1:
+        ks = t[:,q_hidden:]
     else:
-        ks = sp_neg1(t[:,hidden_size:], tp, tp_rank)
+        ks = sp_neg1(t[:,q_hidden:], tp, tp_rank)
     return torch.concat([qs, ks], dim=1).contiguous()
 
-def sp_head_lora(t: torch.Tensor, tp: int, tp_rank: int, hidden_size: int, kv_broadcast: bool, **kwargs: Any) -> torch.Tensor:
-    # lora_b[dim0, 3*hidden_size]
-    dim0 = t.shape[0]
-    if len(t.shape) == 2 and t.shape[1] != hidden_size * 3:
-        qk_hidden_size = (t.shape[1] - hidden_size) // 2
-        qs = sp_neg1(t[:,:hidden_size], tp, tp_rank)
-        if kv_broadcast:
-            ks = t[:,hidden_size:hidden_size + qk_hidden_size]
-            vs = t[:,hidden_size + qk_hidden_size:]
-        else:
-            ks = sp_neg1(t[:,hidden_size:hidden_size + qk_hidden_size], tp, tp_rank)
-            vs = sp_neg1(t[:,hidden_size + qk_hidden_size:], tp, tp_rank)
-        return torch.concat([qs, ks, vs], dim=1).contiguous()
-    else:
-        return sp_neg1(t.reshape(dim0, 3, hidden_size), tp, tp_rank)
+def sp_head_lora(t: torch.Tensor, hidden_size, **kwargs: Any) -> torch.Tensor:
+    hidden_size = t.shape[0]
+    return get_sp_tensor(t, hidden_size=hidden_size, **kwargs)
+
+def sp_head_gemm_a8(t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    return get_sp_tensor(t.reshape([t.shape[0], -1]).T, **kwargs).T
+
+def sp_head_s_gemm_a8(t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    return sp_head_s(t, **kwargs)
 
 def trans_qkv(ts: List[torch.Tensor], hidden_size: int, head_num: int, size_per_head: int = -1) -> torch.Tensor:
     if size_per_head == -1:
@@ -314,6 +277,16 @@ class W:
     attn_o_b = 'self_attention_weights.attention_output_weight.bias'
     post_ln_gamma = 'post_layernorm_weights.gamma'
     post_ln_beta = 'post_layernorm_weights.beta'
+    linear_bias_slopes = "linear_bias_slopes"
+
+    #jina_bert
+    q_ln_gamma      = "self_attention_weights.q_layernorm.gamma"
+    q_ln_beta       = "self_attention_weights.q_layernorm.beta"
+    k_ln_gamma      = "self_attention_weights.k_layernorm.gamma"
+    k_ln_beta       = "self_attention_weights.k_layernorm.beta"
+
+    post_ln_2_gamma = 'post_layernorm_weights_2.gamma'
+    post_ln_2_beta = 'post_layernorm_weights_2.beta'
 
     # ffn
     ffn_w1 = 'ffn_weights.intermediate_weight.kernel'
@@ -397,6 +370,20 @@ class W:
     attn_o_shift = 'self_attention_weights.attention_output_weight.shift'
     ffn_smoother = 'ffn_weights.intermediate_weight2.smoother'
 
+    #per tensor quant
+    pre_decoder_ln_static_quant = "pre_decoder_layernorm.static_quant"
+    pre_decoder_ln_static_quant_reciprocal = 'pre_decoder_layernorm.static_quant_reciprocal'
+    pre_ln_static_quant = 'pre_layernorm_weights.static_quant'
+    pre_ln_static_quant_reciprocal = 'pre_layernorm_weights.static_quant_reciprocal'
+    attention_output_static_quant = 'self_attention_weights.attention_output_weight.static_quant'
+    attention_output_static_quant_reciprocal = 'self_attention_weights.attention_output_weight.static_quant_reciprocal'
+    post_ln_static_quant = 'post_layernorm_weights.static_quant'
+    post_ln_static_quant_reciprocal = 'post_layernorm_weights.static_quant_reciprocal'
+    ffn_intermediate_weight2_static_quant = 'ffn_weights.intermediate_weight2.static_quant'
+    ffn_intermediate_weight2_static_quant_reciprocal = 'ffn_weights.intermediate_weight2.static_quant_reciprocal'
+    post_ffn_ln_static_quant = "post_ffn_layernorm_weights.static_quant"
+    post_ffn_ln_static_quant_reciprocal = "post_ffn_layernorm_weights.static_quant_reciprocal"
+
     # medusa lm_head
     medusa_head = 'medusa_head'
 
@@ -477,6 +464,19 @@ class W:
 
     sq_quant_shifts = [
         attn_o_shift
+    ]
+
+    static_quant_scales = [
+        pre_ln_static_quant,
+        pre_ln_static_quant_reciprocal,
+        attention_output_static_quant,
+        attention_output_static_quant_reciprocal,
+        post_ln_static_quant,
+        post_ln_static_quant_reciprocal,
+        ffn_intermediate_weight2_static_quant,
+        ffn_intermediate_weight2_static_quant_reciprocal,
+        post_ffn_ln_static_quant,
+        post_ffn_ln_static_quant_reciprocal
     ]
 
     int8_attn_weights = [
@@ -713,11 +713,13 @@ class WeightInfo:
     name: str
     weights: List[CkptWeightInfo]
     process_fun: Callable[[List[torch.Tensor]], torch.Tensor]
+    data_type: Optional[torch.dtype] = None
 
-    def __init__(self, name: str, weights: List[CkptWeightInfo], process_fun: Callable[[List[torch.Tensor]], torch.Tensor] = identity) -> None:
+    def __init__(self, name: str, weights: List[CkptWeightInfo], process_fun: Callable[[List[torch.Tensor]], torch.Tensor] = identity, data_type: Optional[torch.dtype] = None) -> None:
         self.name = name
         self.weights = weights
         self.process_fun = process_fun
+        self.data_type = data_type
 
     def get_ckpt_tensor_names(self) -> List[str]:
         if not bool(self.weights):
@@ -1120,6 +1122,7 @@ class LoraResource():
     def __init__(self, lora_infos: Dict[str, str] = dict(), database: Optional[BaseDatabase] = None,
                  weights_info: Optional[WeightInfo] = None,
                  lora_map: Optional[LoRAMap] = None):
+        self.device = g_parallel_info.device
         self.lora_infos = lora_infos
         self.database = database
         self.model_weights_loader = None
@@ -1128,10 +1131,10 @@ class LoraResource():
         self.lora_map = lora_map
 
         self.max_lora_model_size = int(os.environ.get("MAX_LORA_MODEL_SIZE", "-1"))
-        self.rlock_map: Dict[str, RWLock] = {}
         self.to_add_lora_id = list()
         self.to_remove_lora_id = list()
-        # self.stream = torch.cuda.Stream()
+        self.stream = torch.cuda.Stream()
+        self.global_lock_ = RWlock()
 
     @property
     def is_merge_lora(self):
@@ -1141,13 +1144,8 @@ class LoraResource():
         self.to_add_lora_id.clear()
         self.to_remove_lora_id.clear()
 
-    def delete_rlock(self, name: str) -> None:
-        if name in self.rlock_map:
-            del self.rlock_map[name]
-
     def add_lora_name(self, name: str, weights: LoRAWeights) -> int:
         id = self.lora_map.add_lora_name(name, weights)
-        self.rlock_map[name] = RWlock()
         self.to_add_lora_id.append(id)
         return id
 
@@ -1167,20 +1165,11 @@ class LoraResource():
             if lora_name not in lora_infos:
                 self.database.remove_lora(lora_name)
                 remove_lora_names.append(lora_name)
-
-        for lora_name in remove_lora_names:
-            self.write_acquire(lora_name)
-        try:
             self.clear_for_update()
             for lora_name in remove_lora_names:
                 self.remove_lora_name(lora_name)
             for op in self.ft_op:
                 op.update_lora()
-        finally:
-            for lora_name in remove_lora_names:
-                self.write_release(lora_name)
-        for lora_name in remove_lora_names:
-            self.delete_rlock(lora_name)
 
     def add_new_lora(self, lora_infos: Dict[str, str]):
         for lora_name, lora_path in lora_infos.items():
@@ -1191,7 +1180,7 @@ class LoraResource():
             lora_name = lora_config.name
             if self.lora_map.has_id(lora_name):
                 continue
-            lora_weights = self.model_weights_loader.load_lora_weights_from_scratch(lora_name, 'cuda:0')
+            lora_weights = self.model_weights_loader.load_lora_weights_from_scratch(lora_name, self.device)
             self.model_weights_loader.show_warns(lora_name=lora_name, only_dump_lora=True)
             _ = self.add_lora_name(lora_name, lora_weights)
         for op in self.ft_op:
@@ -1200,12 +1189,17 @@ class LoraResource():
     def update(self, lora_infos: Dict[str, str]):
         if self.max_lora_model_size != -1 and len(lora_infos) > self.max_lora_model_size:
             raise LoraCountException(f'lora_infos[{lora_infos}]\'s size exceed MAX_LORA_MODEL_SIZE[{self.max_lora_model_size}]')
-        with torch.cuda.stream(self.stream):
-            self.check_remaining_lora(lora_infos)
-            self.remove_old_lora(lora_infos)
-            self.add_new_lora(lora_infos)
-        self.lora_infos = lora_infos
-        self.database.dump_lora_info()
+        self.global_lock_.write_acquire()
+        try:
+            with torch.cuda.stream(self.stream):
+                self.check_remaining_lora(lora_infos)
+                self.remove_old_lora(lora_infos)
+                self.add_new_lora(lora_infos)
+
+            self.lora_infos = lora_infos
+            self.database.dump_lora_info()
+        finally:
+            self.global_lock_.write_release()
 
     def get_id(self, name: str) -> int:
         if self.is_merge_lora:
@@ -1217,34 +1211,25 @@ class LoraResource():
             return self.lora_map.get_id(name)
 
     def read_acquire(self, lora_name: str):
-        if lora_name in self.rlock_map:
-            self.rlock_map[lora_name].read_acquire()
+        self.global_lock_.read_acquire()
 
     def read_release(self, lora_name: str):
-        if lora_name in self.rlock_map:
-            self.rlock_map[lora_name].read_release()
+        self.global_lock_.read_release()
 
-    def write_acquire(self, lora_name: str):
-        if lora_name in self.rlock_map:
-            self.rlock_map[lora_name].write_acquire()
-
-    def write_release(self, lora_name: str):
-        if lora_name in self.rlock_map:
-            self.rlock_map[lora_name].write_release()
 
 class ModelWeights:
-    def __init__(self, num_layers: int):
+    def __init__(self, num_layers: int, device: str, dtype: torch.dtype):
+        self.device = device
         self.weights: List[Dict[str, torch.Tensor]] = []
         self.global_weights: Dict[str, torch.Tensor] = {}
         self._pytorch_weights: Dict[str, torch.Tensor] = {}
         self.lora_resource: LoraResource = LoraResource()
-        self._dtype = None
+        self._dtype = dtype
 
-        for i in range(num_layers):
+        for _ in range(num_layers):
             self.weights.append({})
 
     def append_pytorch_weight(self, name: str, tensor: torch.Tensor):
-        self._dtype = tensor.dtype
         self._pytorch_weights[name] = tensor
 
     def steal_pytorch_weight(self, name: str):
@@ -1262,10 +1247,6 @@ class ModelWeights:
 
     def append_global_weight(self, name: str, tensor: torch.Tensor):
         self.global_weights[name] = tensor
-
-    @property
-    def device(self):
-        return 'cuda:0'
 
     @property
     def dtype(self):

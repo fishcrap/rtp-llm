@@ -1,4 +1,7 @@
-load("//:def.bzl", "copts", "cuda_copts", "torch_deps")
+load("//:def.bzl", "copts", "cuda_copts")
+load("//bazel:arch_select.bzl", "torch_deps")
+load("//src/fastertransformer/devices:device_defs.bzl",
+    "device_impl_target", "device_test_envs", "device_linkopts")
 test_linkopts = [
     "-lpython3.10",
     "-ltorch",
@@ -17,15 +20,23 @@ test_copts = [
 ] + cuda_copts() + copts()
 
 
-py_test (
-    name = "model_rpc_client_test",
-    srcs = ["model_rpc_client_test.py"],
-    deps = [
-        "//maga_transformer/cpp:model_rpc_client",
-        "//maga_transformer:testlib",
-        "//maga_transformer/test/model_test/test_util:test_util"
-    ],
-)
+# py_test (
+#     name = "model_rpc_client_test",
+#     srcs = ["model_rpc_client_test.py"],
+#     deps = [
+#         "//maga_transformer/cpp:model_rpc_client",
+#         "//maga_transformer:testlib",
+#         "//maga_transformer/test/model_test/test_util:test_util"
+#     ],
+# )
+
+test_deps = [
+    "//src/fastertransformer/devices/testing:device_test_utils",
+    "//maga_transformer/cpp:models",
+    "//:gpt_init_params",
+    "@com_google_googletest//:gtest",
+    "@com_google_googletest//:gtest_main",
+] + device_impl_target()
 
 # cc_test(
 #     name = "model_rpc_server_test",
@@ -63,7 +74,7 @@ cc_test(
         "//src/fastertransformer/devices/cuda_impl:cuda_impl",
         "//3rdparty/contextFusedMultiHeadAttention:trt_fmha_impl",
         "//3rdparty/trt_fused_multihead_attention:trt_fused_multihead_attention_impl",
-        "//3rdparty/flash_attention2:flash_attention2_impl",
+        "@flash_attention//:flash_attention2_impl",
         "//src/fastertransformer/devices/testing:device_test_utils"
     ] + torch_deps(),
     env = {

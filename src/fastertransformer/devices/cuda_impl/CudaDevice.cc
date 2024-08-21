@@ -5,9 +5,10 @@
 #include "src/fastertransformer/cuda/nccl/nccl_utils_torch.h"
 #include "src/fastertransformer/cuda/nccl/nccl_utils.h"
 #include "src/fastertransformer/core/TrackerAllocator.h"
+#include "src/fastertransformer/devices/OpData.h"
 #include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/compiler_config.h"
-
+#include "src/fastertransformer/cuda/torch_cuda_allocator.h"
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <unistd.h>
@@ -18,13 +19,10 @@ using namespace tensorrt_llm::kernels;
 
 namespace fastertransformer {
 
-static const size_t DEFAULT_MAX_BATCH_SIZE = 256;
-
 CudaDevice::CudaDevice(const DeviceInitParams& params) : DeviceBase(params) {
     FT_LOG_INFO("Initialize CudaDevice. %d", device_id_);
     check_cuda_error(cudaSetDevice(device_id_));
-    check_cuda_error(cudaStreamCreate(&stream_));
-
+    stream_ = at::cuda::getCurrentCUDAStream().stream();
     check_cuda_error(cublasCreate(&cublas_handle_));
     check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     check_cuda_error(cublasSetStream(cublas_handle_, stream_));
@@ -35,6 +33,8 @@ CudaDevice::CudaDevice(const DeviceInitParams& params) : DeviceBase(params) {
     smooth_quant_plugin_ = std::make_unique<trt_plugins::SmoothQuantGemmPlugin>();
 
     weight_only_groupwise_matmul_plugin_ = std::make_unique<trt_plugins::WeightOnlyGroupwiseQuantMatmulPlugin>();
+
+    moe_plugin_ = std::make_unique<trt_plugins::MixtureOfExpertsPlugin>();
 
     auto ret = nvmlInit();
     FT_CHECK(ret == NVML_SUCCESS);
@@ -111,6 +111,11 @@ CudaDevice::CudaDevice(const DeviceInitParams& params) : DeviceBase(params) {
         allocator_.reset(allocator_ptr);
     }
 
+    origin_torch_cuda_allocator_ = at::cuda::CUDACachingAllocator::allocator;
+    initTorchCUDAAllocator(allocator_.get());
+    // tmp not change torch cuda gpu allocate, because conflict with lora weights
+    // at::cuda::CUDACachingAllocator::allocator.store(getTorchCUDAAllocator());
+
     if (params.host_reserve_memory_bytes) {
         RUNTIME_ASSERT_OP_ARG(params.host_reserve_memory_bytes > 0,
             "cuda host memory can not reserve as much as possible (%lu), must specify concrete size.",
@@ -130,6 +135,8 @@ CudaDevice::CudaDevice(const DeviceInitParams& params) : DeviceBase(params) {
 }
 
 CudaDevice::~CudaDevice() {
+    // tmp not change torch cuda gpu allocate, because conflict with lora weights
+    // at::cuda::CUDACachingAllocator::allocator.store(origin_torch_cuda_allocator_);
     curandstate_buf_.reset();
     cublas_mm_wrapper_.reset();
     check_cuda_error(cudaStreamDestroy(stream_));
@@ -168,9 +175,41 @@ DeviceProperties CudaDevice::getDeviceProperties() {
         prop->id = device_id_;
         prop->tp_rank = nccl_param_.rank_;
         prop->tp_size = nccl_param_.world_size_;
-        prop->attention_need_mask = !(use_openSource_fmha || use_trtv1_fmha || use_trtv2_fmha);
     }
     return *prop;
+}
+
+DevicePrepOutput CudaDevice::prepareModelRun(const DevicePrepParams& params) {
+    DevicePrepOutput output;
+    if (params.context_batch_size) {
+        cufmha_runner_->setup(params.dtype,
+                            params.configs.mask_type,
+                            params.configs.head_num,
+                            params.configs.kv_head_num,
+                            params.configs.size_per_head,
+                            params.configs.q_scaling,
+                            params.has_alibi_slopes);
+        if (params.diff_qkv_len && params.has_kv_cache && !params.int8_kv_cache && !params.sprase_head) {
+            if (use_trtv2_fmha_paged && cufmha_runner_->trtV2FmhaSupport()) {
+                fmha_type_ = FMHAType::PAGED_TRT_V2;
+            } else if (use_open_source_fmha_paged && cufmha_runner_->openSourceFmhaSupport()
+                    && params.configs.tokens_per_block % 256 == 0) {
+                fmha_type_ = FMHAType::PAGED_OPEN_SOURCE;
+            }
+        } else if (!params.diff_qkv_len) {
+            if (use_trtv2_fmha && cufmha_runner_->trtV2FmhaSupport()) {
+                fmha_type_ = FMHAType::TRT_V2;
+            } else if (use_open_source_fmha && cufmha_runner_->openSourceFmhaSupport()) {
+                fmha_type_ = FMHAType::OPEN_SOURCE;
+            } else if (use_trtv1_fmha && cufmha_runner_->trtV1FmhaSupport()) {
+                fmha_type_ = FMHAType::TRT_V1;
+            }
+        } else {
+            fmha_type_ = FMHAType::NONE;
+        }
+        output.need_mask = (fmha_type_ == FMHAType::NONE);
+    }
+    return output;
 }
 
 void CudaDevice::checkUseOpenSourceFMHA() {
@@ -179,7 +218,6 @@ void CudaDevice::checkUseOpenSourceFMHA() {
         return;
     }
 
-
     char* fmha_env = std::getenv("ENABLE_OPENSOURCE_FMHA");
     if (fmha_env && std::string(fmha_env) == "OFF") {
         FT_LOG_WARNING("opensource FMHA is disabled for by env");
@@ -187,7 +225,14 @@ void CudaDevice::checkUseOpenSourceFMHA() {
     }
 
     FT_LOG_INFO("use opensource fmha");
-    use_openSource_fmha = true;
+    use_open_source_fmha = true;
+    char* paged_fmha_env = std::getenv("ENABLE_PAGED_OPEN_SOURCE_FMHA");
+    if (paged_fmha_env && std::string(paged_fmha_env) == "OFF") {
+        FT_LOG_INFO("Paged open source FMHA is disabled for by ENABLE_PAGED_TRT_FMHA=OFF env");
+        return;
+    }
+    FT_LOG_INFO("use opensource fmha paged");
+    use_open_source_fmha_paged = true;
 }
 
 void CudaDevice::checkUseTrtV1FMHA() {
@@ -219,6 +264,17 @@ void CudaDevice::checkUseTrtV2FMHA() {
     }
     FT_LOG_INFO("use TRTV2 fmha");
     use_trtv2_fmha = true;
+    if (!(is_sm8x() || is_sm90())) {
+        FT_LOG_INFO("Paged TRT FMHA is disabled for sm %d", get_sm());
+        return;
+    }
+    char* paged_fmha_env = std::getenv("ENABLE_PAGED_TRT_FMHA");
+    if (paged_fmha_env && std::string(paged_fmha_env) == "OFF") {
+        FT_LOG_INFO("Paged TRT FMHA is disabled for by ENABLE_PAGED_TRT_FMHA=OFF env");
+        return;
+    }
+    FT_LOG_INFO("use TRTV2 fmha paged");
+    use_trtv2_fmha_paged = true;
 }
 
 void CudaDevice::checkUseMultiBlockMode() {
@@ -236,42 +292,10 @@ void CudaDevice::checkUseMultiBlockMode() {
     }
     if (get_sm() == 80 || get_sm() >= 89) {
         FT_LOG_INFO("MMHA multi_block_mode is enabled");
-        use_multi_block_mode = false;
+        use_multi_block_mode = true;
         return;
     }
     use_multi_block_mode = true;
-}
-
-template <typename ComputeT, typename WeightsT, cutlass::WeightOnlyQuantOp QuantOp>
-void initMoeRunnerImpl(unique_ptr<CutlassMoeFCRunnerInterface>& moe_runner) {
-    if (moe_runner && dynamic_cast<CutlassMoeFCRunner<ComputeT, WeightsT, QuantOp>*>(moe_runner.get())) {
-        return;
-    } else {
-        moe_runner.reset(new CutlassMoeFCRunner<ComputeT, WeightsT, QuantOp>());
-    }
-}
-
-void CudaDevice::initMoeRunner(const DataType compute_type, const DataType weights_type) {
-    if (compute_type == DataType::TYPE_FP16 && weights_type == DataType::TYPE_FP16) {
-        initMoeRunnerImpl<half, half, cutlass::WeightOnlyQuantOp::UNDEFINED>(moe_runner_);
-    } else if (compute_type == DataType::TYPE_FP32 && weights_type == DataType::TYPE_FP32) {
-        initMoeRunnerImpl<float, float, cutlass::WeightOnlyQuantOp::UNDEFINED>(moe_runner_);
-    } else if (compute_type == DataType::TYPE_FP16 && weights_type == DataType::TYPE_QINT8) {
-        initMoeRunnerImpl<half, uint8_t, cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>(moe_runner_);
-    } else if (compute_type == DataType::TYPE_BF16 && weights_type == DataType::TYPE_BF16) {
-        initMoeRunnerImpl<__nv_bfloat16, __nv_bfloat16, cutlass::WeightOnlyQuantOp::UNDEFINED>(moe_runner_);
-    } else if (compute_type == DataType::TYPE_BF16 && weights_type == DataType::TYPE_QINT8) {
-        initMoeRunnerImpl<__nv_bfloat16, uint8_t, cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>(moe_runner_);
-    } else if (compute_type == DataType::TYPE_FP16 && weights_type == DataType::TYPE_QINT4X2) {
-        initMoeRunnerImpl<half, cutlass::uint4b_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>(moe_runner_);
-    } else if (compute_type == DataType::TYPE_BF16 && weights_type == DataType::TYPE_QINT4X2) {
-        initMoeRunnerImpl<__nv_bfloat16, cutlass::uint4b_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_AND_ZEROS>(moe_runner_);
-    } else {
-        RUNTIME_ASSERT_OP_ARG(
-            false,
-            "MoE runner can not be initialized via compute type %d and weights bits %d",
-            compute_type, weights_type);
-    }
 }
 
 // TODO(wangyin.yx): fill all memory status.
@@ -298,5 +322,17 @@ DeviceStatus CudaDevice::getDeviceStatus() {
 }
 
 RTP_LLM_REGISTER_DEVICE(Cuda);
+
+nvinfer1::DataType nvinfer1DtypeConvert(fastertransformer::DataType dtype)
+ {
+    switch (dtype) {
+        case fastertransformer::DataType::TYPE_FP16 : return nvinfer1::DataType::kHALF;
+        case fastertransformer::DataType::TYPE_BF16 : return nvinfer1::DataType::kBF16;
+        case fastertransformer::DataType::TYPE_FP32 : return nvinfer1::DataType::kFLOAT;
+        case fastertransformer::DataType::TYPE_QINT8 : return nvinfer1::DataType::kINT8;
+        case fastertransformer::DataType::TYPE_QINT4X2 : return nvinfer1::DataType::kINT4;
+        default: throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+    }
+}
 
 }; // namespace fastertransformer

@@ -241,7 +241,7 @@ void CudaDevice::broadcast(const BroadcastParams& params) {
     if (nccl_param_.world_size_ < 2) {
         return;
     }
-
+    NCCLCHECK(ncclGroupStart());
     for (auto i = 0; i < params.buffers.size(); ++i) {
         auto& buffer = params.buffers[i];
         auto root = params.root;
@@ -249,21 +249,25 @@ void CudaDevice::broadcast(const BroadcastParams& params) {
         NCCLCHECK(ncclBcast(buffer->data(), buffer->size(), nccl_data_type, root,
                             nccl_param_.nccl_comm_, stream_));
     }
+    NCCLCHECK(ncclGroupEnd());
 }
 
-void CudaDevice::allReduce(const AllReduceParams& params) {
+AllReduceOutput CudaDevice::allReduce(const AllReduceParams& params) {
     if (nccl_param_.world_size_ < 2) {
-        return;
+        return AllReduceOutput{params.buffer};
     }
     auto& buffer = params.buffer;
     const auto nccl_op = static_cast<ncclRedOp_t>(params.op);
     const auto nccl_data_type = getNcclDataType(buffer->type());
 
     // if custom allreduce fails, fallback to the default ncclAllReduce
-    if (custom_allreduce_comm_ && nccl_op == ncclSum && 
-        custom_allreduce_comm_->checkAllReduceAvailable(buffer->size(), buffer->type())) {
-        custom_allreduce_comm_->allReduce(buffer->data(), buffer->data(), buffer->size(), buffer->type(), stream_);
-        return;
+    if (custom_allreduce_comm_ && nccl_op == ncclSum
+        && custom_allreduce_comm_->checkAllReduceAvailable(buffer->size(), buffer->type())) {
+        auto custom_ar_res_buf =
+            allocateBuffer({buffer->type(), buffer->shape(), AllocationType::DEVICE}, {"custom_ar_buf"});
+        custom_allreduce_comm_->allReduce(
+            buffer->data(), custom_ar_res_buf->data(), buffer->size(), buffer->type(), stream_);
+        return AllReduceOutput{custom_ar_res_buf};
     }
 
     RUNTIME_ASSERT_OP_ARG((int32_t)params.op < ncclRedOp_t::ncclNumOps,
@@ -271,6 +275,26 @@ void CudaDevice::allReduce(const AllReduceParams& params) {
  
     NCCLCHECK(ncclAllReduce(buffer->data(), buffer->data(), buffer->size(), nccl_data_type,
                             nccl_op, nccl_param_.nccl_comm_, stream_));
+    return AllReduceOutput{params.buffer};
+}
+
+PrepareAllReduceOutput CudaDevice::prepareAllReduce(const PrepareAllReduceParams& params) {
+    if (nccl_param_.world_size_ < 2) {
+        return PrepareAllReduceOutput{params.buffer};
+    }
+
+    auto& buffer = params.buffer;
+    if (custom_allreduce_comm_ && static_cast<ncclRedOp_t>(params.op) == ncclSum &&
+        custom_allreduce_comm_->checkAllReduceAvailable(buffer->size(), buffer->type())) {
+        void* custom_ar_buf_ptr = custom_allreduce_comm_->peer_comm_buffer_ptr();
+        return PrepareAllReduceOutput{
+            BufferPtr(new Buffer(MemoryType::MEMORY_GPU,
+                buffer->type(),
+                buffer->shape(),
+                custom_ar_buf_ptr))
+        };
+    }
+    return PrepareAllReduceOutput{params.buffer};
 }
 
 void CudaDevice::allGather(const AllGatherParams& params) {
@@ -287,7 +311,7 @@ void CudaDevice::allGather(const AllGatherParams& params) {
             "Buffer size %d must be divisible by world size %d",
             buffer->size(), nccl_param_.world_size_);
         const auto data_size = data_num * buffer->typeSize();
-        NCCLCHECK(ncclAllGather(buffer->data() + nccl_param_.rank_ * data_size, buffer->data(),
+        NCCLCHECK(ncclAllGather((char*)(buffer->data()) + nccl_param_.rank_ * data_size, buffer->data(),
                                 data_num, nccl_data_type, nccl_param_.nccl_comm_, stream_));
     }
     NCCLCHECK(ncclGroupEnd());

@@ -115,8 +115,6 @@ void FtGpt<T>::forward(th::Tensor&              decoder_output,
                        th::optional<th::Tensor> value_cache_scale,
                        th::optional<th::Tensor> token_type_ids)
 {
-    auto stream        = at::cuda::getCurrentCUDAStream().stream();
-
     auto lora_input_lengths = input_lengths.clone().cpu().to(torch::kInt);
     int batch_size =  sequence_lengths.size(0);
     if (batch_size > 0 && lora_input_lengths.size(0) >= batch_size) {
@@ -132,7 +130,7 @@ void FtGpt<T>::forward(th::Tensor&              decoder_output,
         input_tensors.insert("attention_mask", convert_tensor<T>(attention_mask.value()));
     }
     if (linear_bias_slopes.has_value()) {
-        input_tensors.insert("linear_bias_slopes", convert_tensor<T>(linear_bias_slopes.value()));
+        input_tensors.insert("linear_bias_slopes", convert_tensor<float>(linear_bias_slopes.value()));
     }
     if (count_prefix_length.has_value()) {
         input_tensors.insert("count_prefix_length", convert_tensor<bool>(count_prefix_length.value()));

@@ -75,8 +75,8 @@ class Llava(Llama, MultiModalMixin):
     def __init__(self, config: GptInitModelParameters):
         self.nccl_op_ = NcclOp()
         if g_parallel_info.tp_rank == 0:
-            with torch.cuda.device(torch.device('cuda:0')):
-                self.mm_part = LlavaImageEmbedding(config.vit_related_params.config)
+            with torch.cuda.device(torch.device(g_parallel_info.device)):
+                self.mm_part = LlavaImageEmbedding(config.vit_related_params.config, g_parallel_info.device)
             vit_weight_dict: Dict[str, Any] = {"mm_projector": self.mm_part.mm_projector}
             if config.vit_related_params.config["unfreeze_mm_vision_tower"] or \
                 "mm_vision_tower" in config.vit_related_params.config["mm_tunable_parts"]:
@@ -126,7 +126,7 @@ class Llava(Llama, MultiModalMixin):
             Llava.from_huggingface(config, config_json)
         else:
             raise Exception("llava parameter from unkown source")
-        config.tp_split_emb_and_lm_head = False # llava embedding can't tp
+        config.tp_split_emb_and_lm_head = True if int(os.environ.get("USE_RPC_MODEL", "0")) == 1 else False
         return config
 
     @staticmethod
@@ -182,6 +182,7 @@ class Llava(Llama, MultiModalMixin):
                 config.vit_related_params.config["patch_size"] = patch_size
                 config.vit_related_params.config["image_size"] = img_size
             config.vit_related_params.config["vit_tower_path"] = vis_tower_name
+            config.mm_sep_tokens = [-200] # image_token_index
 
     @classmethod
     def get_tokenizer(cls, config: GptInitModelParameters):
@@ -226,8 +227,8 @@ class Llava(Llama, MultiModalMixin):
 
         new_input_embeds = []
 
-        tune_mm_mlp_adapter = self.config.vit_related_params.config["tune_mm_mlp_adapter"]
-        mm_use_im_start_end = self.config.vit_related_params.config["mm_use_im_start_end"]
+        tune_mm_mlp_adapter = self.config.vit_related_params.config.get("tune_mm_mlp_adapter", False)
+        mm_use_im_start_end = self.config.vit_related_params.config.get("mm_use_im_start_end", False)
         append_extra_tokens = tune_mm_mlp_adapter and mm_use_im_start_end
 
         cur_input_ids = input_ids

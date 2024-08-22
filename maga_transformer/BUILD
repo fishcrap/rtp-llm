@@ -21,7 +21,7 @@ tensorrt = [
 
 xft_dep = select({
     "//:xft_use_icx": [
-        "xfastertransformer_devel_icx",
+        # "xfastertransformer_devel_icx",
     ],
     "//conditions:default": [
         "xfastertransformer_devel",
@@ -53,9 +53,9 @@ requirement([
     "onnx",
     "sentence-transformers",
     "orjson",
-    "xfastertransformer_devel",
-    "xfastertransformer_devel_icx",
-    "decord",
+    # "xfastertransformer_devel",
+    # "xfastertransformer_devel_icx",
+    # "decord",
     # add qwen agent package
     "pydantic",
     "json5",
@@ -83,7 +83,7 @@ py_library(
     deps = [
         ":torch",
         ":safetensors",
-        ":decord",
+        # ":decord",
         ":lru-dict",
         ":cpm_kernels",
         ":prettytable",
@@ -150,14 +150,14 @@ py_library(
         ":ops",
         ":timm",
         ":onnx",
-        ":decord",
+        # ":decord",
         ":nest_asyncio"
     ] + select({
         "//:using_cuda12": tensorrt,
         "//conditions:default": []
     }) + select({
         "//:xft_use_icx": [
-            "xfastertransformer_devel_icx",
+            # "xfastertransformer_devel_icx",
         ],
         "//conditions:default": [
             "xfastertransformer_devel",
@@ -366,7 +366,7 @@ py_wheel(
         "timm==0.9.12",
         "sentence-transformers==2.7.0",
         "grpcio==1.62.0",
-        "decord==0.6.0",
+        # "decord==0.6.0",
         "oss2",
         "json5",
         "dashscope>=1.11.0",
@@ -415,7 +415,7 @@ py_wheel(
         "pydantic==2.5.3",
         "sentence-transformers==2.7.0",
         "grpcio==1.62.0",
-        "decord==0.6.0",
+        # "decord==0.6.0",
         "timm==0.9.12",
         "kserve",
         "nest_asyncio",

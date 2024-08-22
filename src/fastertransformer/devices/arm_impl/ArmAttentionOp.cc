@@ -341,7 +341,7 @@ void ArmCpuDevice::contextAttentionFallback(const AttentionModuleParams& params)
                 throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
             }
         } else {
-            throw std::runtime_error("SelfAttention RoPE type is not supported");
+            throw std::runtime_error(fmtstr("SelfAttention RoPE type is not supported %d", params.configs.rope_config.style));
         }
     }
     tEnd = std::chrono::steady_clock::now();

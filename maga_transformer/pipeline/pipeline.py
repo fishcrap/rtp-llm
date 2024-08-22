@@ -254,7 +254,7 @@ class Pipeline(object):
     async def generate_stream(self, request_id: int, token_ids: List[int], urls: List[Future[torch.Tensor]],
                             generate_config: GenerateConfig, **kwargs: Any) -> AsyncGenerator[GenerateResponse, None]:
         token_type_ids = []
-        token_ids = torch.tensor(token_ids, dtype=torch.int, pin_memory=True)
+        token_ids = torch.tensor(token_ids, dtype=torch.int)#, pin_memory=True)
 
         input = GenerateInput(request_id=request_id,
                               token_ids=token_ids,

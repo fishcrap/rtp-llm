@@ -7,7 +7,7 @@ build -c opt
 build --copt -O2
 build --copt -g --strip=never
 build --copt -Wall
-build --copt -Werror
+# build --copt -Werror
 build --copt -Wno-unknown-pragmas # omp
 build --copt -Wno-sign-compare # alog
 build --copt -Wno-attributes # pybind11

@@ -1006,8 +1006,6 @@ class ModelDeployWeightInfo:
             return W.gpt_style_tp_strategy
 
 
-
-
 class ModelWeights:
     def __init__(self, num_layers: int, device: str, dtype: torch.dtype):
         self.device = device

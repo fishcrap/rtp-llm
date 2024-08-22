@@ -3,6 +3,7 @@
 #include "src/fastertransformer/core/allocator.h"
 #include "src/fastertransformer/core/cpu_allocator.h"
 #include <cstring>
+#include <sys/sysinfo.h>
 
 namespace fastertransformer {
 
@@ -53,9 +54,9 @@ GroupedGemmOutput ArmCpuDevice::groupedGemm(const GroupedGemmParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
 }
 
-void ArmCpuDevice::sampleGreedy(const GreedyParams& params) {
-    throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
-}
+// void ArmCpuDevice::sampleGreedy(const GreedyParams& params) {
+    // throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+// }
 
 void ArmCpuDevice::sampleBeamSearch(const BeamSearchParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
@@ -67,6 +68,42 @@ void ArmCpuDevice::broadcast(const BroadcastParams& params) {
 
 void ArmCpuDevice::allReduceSum(const AllReduceParams& params) {
     throw OpException(OpErrorType::ERROR_UNIMPLEMENTED);
+}
+
+int getMemoryInfo(unsigned long *free_bytes, unsigned long *total_bytes) {
+    struct sysinfo info;
+
+    if (sysinfo(&info) != 0) {
+        // sysinfo call failed
+        return -1;
+    }
+
+    *free_bytes = info.freeram * info.mem_unit;
+    *total_bytes = info.totalram * info.mem_unit;
+
+    return 0;
+}
+
+DeviceStatus ArmCpuDevice::getDeviceStatus() {
+    DeviceStatus status;
+
+    size_t total_bytes;
+    auto error = getMemoryInfo(&status.device_memory_status.free_bytes, &total_bytes);
+    FT_CHECK(error == 0);
+    status.device_memory_status.used_bytes = total_bytes - status.device_memory_status.free_bytes;
+
+    const auto buffer_status = queryBufferStatus();
+    status.device_memory_status.allocated_bytes = buffer_status.device_allocated_bytes;
+    status.device_memory_status.preserved_bytes = status.device_memory_status.free_bytes;//buffer_status.device_preserved_bytes;
+    status.host_memory_status.allocated_bytes = buffer_status.host_allocated_bytes;
+    status.device_memory_status.available_bytes = status.device_memory_status.free_bytes + status.device_memory_status.preserved_bytes;
+
+    printf("preserved_bytes %d total_bytes %d free_bytes %d \n",
+        status.device_memory_status.preserved_bytes,
+        total_bytes,
+        status.device_memory_status.free_bytes);
+
+    return status;
 }
 
 RTP_LLM_REGISTER_DEVICE(ArmCpu);

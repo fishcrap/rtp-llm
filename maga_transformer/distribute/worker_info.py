@@ -20,11 +20,11 @@ class ParallelInfo(object):
         self.world_size = world_size
         self.world_rank = world_rank
         self.local_world_size = local_world_size
-        if bool(os.environ.get("SP_CHECKPOINT_PATH", "") != ""):
-            self.device = 'cuda:0'
-        else:
-            self.device = self.world_rank % self.local_world_size
-
+        self.device = 'cpu'
+        # if bool(os.environ.get("SP_CHECKPOINT_PATH", "") != ""):
+        #     self.device = 'cuda:0'
+        # else:
+        #     self.device = self.world_rank % self.local_world_size
 
     @property
     def is_pp_first(self) -> bool:

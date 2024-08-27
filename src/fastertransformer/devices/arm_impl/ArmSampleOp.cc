@@ -15,17 +15,12 @@
 
 #define TOP_K_MAX 1024
 
+namespace fastertransformer {
+
 float random_one_data(std::mt19937& generator) {
     static std::uniform_real_distribution<float> dist(0.0, 1.0);
     float rand = dist(generator);
     return rand;
-}
-
-template <typename T0, typename F>
-void parallel_for(const T0& D0, const F& func) {
-    int nthr = omp_get_max_threads();
-#pragma omp parallel for num_threads(nthr)
-    for (T0 d0 = 0; d0 < D0; ++d0) func(d0);
 }
 
 void temperaturePenalty(float *           logits,
@@ -209,8 +204,6 @@ void topk_sampling(int    batch_size,
         }
     });
 }
-
-namespace fastertransformer {
 
 void ArmCpuDevice::sampleGreedy(const GreedyParams& params) {
     const auto& logits = params.logits;

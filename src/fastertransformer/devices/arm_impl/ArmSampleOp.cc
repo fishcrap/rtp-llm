@@ -353,7 +353,7 @@ void ArmCpuDevice::sampleGreedy(const GreedyParams& params) {
                   skip_top_k_decode_buf->data<bool>(),
                   step + 1);
 
-    printBufferData(tokens, "output_token_ids", nullptr, true);
+    // printBufferData(tokens, "output_token_ids", nullptr, true);
 
     return;
 }

@@ -205,19 +205,18 @@ MaskOutput DeviceBase::attentionMask(const MaskParams& params) {
             attention_mask[i].slice(1, input_lengths[i], max_input_seq_len) = 0;
         }
     }
-    // FIXME: workaround for segfault with //maga_transformer/cpp/test:gpt_model_test
-    // if (params.prefix_lengths.size()) {
-    //     FT_CHECK(int(params.prefix_lengths.size()) == batch_size);
-    //     const int *prefix_lengths = params.prefix_lengths.data<int32_t>();
-    //     auto max_reuse_length = *std::max_element(prefix_lengths, prefix_lengths + batch_size);
-    //     attention_mask = torch::cat({attention_mask, torch::zeros({(int)batch_size, max_input_seq_len, max_reuse_length}).to(torch_type)}, -1);
-    //     if (max_reuse_length) {
-    //         for (int i = 0; i < batch_size; ++i) {
-    //             attention_mask[i] = attention_mask[i].roll({prefix_lengths[i]}, {-1});
-    //             attention_mask[i].slice(0, 0, input_lengths[i]).slice(1, 0, prefix_lengths[i]) = 1;
-    //         }
-    //     }
-    // }
+    if (params.prefix_lengths.size()) {
+        FT_CHECK(int(params.prefix_lengths.size()) == batch_size);
+        const int *prefix_lengths = params.prefix_lengths.data<int32_t>();
+        auto max_reuse_length = *std::max_element(prefix_lengths, prefix_lengths + batch_size);
+        attention_mask = torch::cat({attention_mask, torch::zeros({(int)batch_size, max_input_seq_len, max_reuse_length}).to(torch_type)}, -1);
+        if (max_reuse_length) {
+            for (int i = 0; i < batch_size; ++i) {
+                attention_mask[i] = attention_mask[i].roll({prefix_lengths[i]}, {-1});
+                attention_mask[i].slice(0, 0, input_lengths[i]).slice(1, 0, prefix_lengths[i]) = 1;
+            }
+        }
+    }
     return clone({*torchTensor2Buffer(attention_mask)});
 }
 
